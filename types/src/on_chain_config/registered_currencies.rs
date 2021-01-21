@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::on_chain_config::OnChainConfig;
@@ -23,16 +23,12 @@ impl fmt::Display for RegisteredCurrencies {
 }
 
 impl RegisteredCurrencies {
-    pub fn new(currency_codes: Vec<Identifier>) -> Self {
-        Self { currency_codes }
-    }
-
     pub fn currency_codes(&self) -> &[Identifier] {
         &self.currency_codes
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        lcs::from_bytes(bytes).map_err(Into::into)
+        bcs::from_bytes(bytes).map_err(Into::into)
     }
 }
 

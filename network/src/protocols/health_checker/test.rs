@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
@@ -6,14 +6,16 @@ use crate::{
     peer_manager::{
         self, conn_notifs_channel, ConnectionRequest, PeerManagerNotification, PeerManagerRequest,
     },
-    protocols::rpc::InboundRpcRequest,
+    protocols::{
+        network::{NewNetworkEvents, NewNetworkSender},
+        rpc::InboundRpcRequest,
+    },
+    transport::ConnectionMetadata,
     ProtocolId,
 };
-use channel::{libra_channel, message_queues::QueueStyle};
+use channel::{diem_channel, message_queues::QueueStyle};
+use diem_config::{config::RoleType, network_id::NetworkId};
 use futures::sink::SinkExt;
-use libra_config::{config::RoleType, network_id::NetworkId};
-use libra_network_address::NetworkAddress;
-use std::{num::NonZeroUsize, str::FromStr};
 use tokio::runtime::Runtime;
 
 const PING_TIMEOUT: Duration = Duration::from_millis(500);
@@ -22,20 +24,17 @@ fn setup_permissive_health_checker(
     rt: &mut Runtime,
     ping_failures_tolerated: u64,
 ) -> (
-    libra_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
-    libra_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
-    libra_channel::Receiver<PeerId, ConnectionRequest>,
+    diem_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
+    diem_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
+    diem_channel::Receiver<PeerId, ConnectionRequest>,
     conn_notifs_channel::Sender,
     channel::Sender<()>,
 ) {
     let (ticker_tx, ticker_rx) = channel::new_test(0);
 
-    let (peer_mgr_reqs_tx, peer_mgr_reqs_rx) =
-        libra_channel::new(QueueStyle::FIFO, NonZeroUsize::new(1).unwrap(), None);
-    let (connection_reqs_tx, connection_reqs_rx) =
-        libra_channel::new(QueueStyle::FIFO, NonZeroUsize::new(1).unwrap(), None);
-    let (network_notifs_tx, network_notifs_rx) =
-        libra_channel::new(QueueStyle::FIFO, NonZeroUsize::new(1).unwrap(), None);
+    let (peer_mgr_reqs_tx, peer_mgr_reqs_rx) = diem_channel::new(QueueStyle::FIFO, 1, None);
+    let (connection_reqs_tx, connection_reqs_rx) = diem_channel::new(QueueStyle::FIFO, 1, None);
+    let (network_notifs_tx, network_notifs_rx) = diem_channel::new(QueueStyle::FIFO, 1, None);
     let (connection_notifs_tx, connection_notifs_rx) = conn_notifs_channel::new();
 
     let hc_network_tx = HealthCheckerNetworkSender::new(
@@ -44,9 +43,9 @@ fn setup_permissive_health_checker(
     );
     let hc_network_rx = HealthCheckerNetworkEvents::new(network_notifs_rx, connection_notifs_rx);
     let network_context =
-        NetworkContext::new(NetworkId::Validator, RoleType::Validator, PeerId::default());
+        NetworkContext::new(NetworkId::Validator, RoleType::Validator, PeerId::ZERO);
     let health_checker = HealthChecker::new(
-        network_context,
+        Arc::new(network_context),
         ticker_rx,
         hc_network_tx,
         hc_network_rx,
@@ -66,9 +65,9 @@ fn setup_permissive_health_checker(
 fn setup_strict_health_checker(
     rt: &mut Runtime,
 ) -> (
-    libra_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
-    libra_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
-    libra_channel::Receiver<PeerId, ConnectionRequest>,
+    diem_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
+    diem_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
+    diem_channel::Receiver<PeerId, ConnectionRequest>,
     conn_notifs_channel::Sender,
     channel::Sender<()>,
 ) {
@@ -76,7 +75,7 @@ fn setup_strict_health_checker(
 }
 
 async fn expect_ping(
-    network_reqs_rx: &mut libra_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
+    network_reqs_rx: &mut diem_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
 ) -> (Ping, oneshot::Sender<Result<Bytes, RpcError>>) {
     let req = network_reqs_rx.next().await.unwrap();
     let rpc_req = match req {
@@ -84,28 +83,28 @@ async fn expect_ping(
         _ => panic!("Unexpected PeerManagerRequest: {:?}", req),
     };
 
-    let protocol = rpc_req.protocol;
+    let protocol_id = rpc_req.protocol_id;
     let req_data = rpc_req.data;
     let res_tx = rpc_req.res_tx;
 
-    assert_eq!(protocol, ProtocolId::HealthCheckerRpc,);
+    assert_eq!(protocol_id, ProtocolId::HealthCheckerRpc,);
 
-    match lcs::from_bytes(&req_data).unwrap() {
+    match bcs::from_bytes(&req_data).unwrap() {
         HealthCheckerMsg::Ping(ping) => (ping, res_tx),
         msg => panic!("Unexpected HealthCheckerMsg: {:?}", msg),
     }
 }
 
 async fn expect_ping_send_ok(
-    network_reqs_rx: &mut libra_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
+    network_reqs_rx: &mut diem_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
 ) {
     let (ping, res_tx) = expect_ping(network_reqs_rx).await;
-    let res_data = lcs::to_bytes(&HealthCheckerMsg::Pong(Pong(ping.0))).unwrap();
+    let res_data = bcs::to_bytes(&HealthCheckerMsg::Pong(Pong(ping.0))).unwrap();
     res_tx.send(Ok(res_data.into())).unwrap();
 }
 
 async fn expect_ping_send_notok(
-    network_reqs_rx: &mut libra_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
+    network_reqs_rx: &mut diem_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
 ) {
     let (_ping_msg, res_tx) = expect_ping(network_reqs_rx).await;
     // This mock ping request must fail.
@@ -113,7 +112,7 @@ async fn expect_ping_send_notok(
 }
 
 async fn expect_ping_timeout(
-    network_reqs_rx: &mut libra_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
+    network_reqs_rx: &mut diem_channel::Receiver<(PeerId, ProtocolId), PeerManagerRequest>,
 ) {
     let (_ping_msg, _res_tx) = expect_ping(network_reqs_rx).await;
     // Sleep for ping timeout plus a little bit.
@@ -123,15 +122,15 @@ async fn expect_ping_timeout(
 async fn send_inbound_ping(
     peer_id: PeerId,
     ping: u32,
-    network_notifs_tx: &mut libra_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
+    network_notifs_tx: &mut diem_channel::Sender<(PeerId, ProtocolId), PeerManagerNotification>,
 ) -> oneshot::Receiver<Result<Bytes, RpcError>> {
-    let protocol = ProtocolId::HealthCheckerRpc;
-    let data = lcs::to_bytes(&HealthCheckerMsg::Ping(Ping(ping)))
+    let protocol_id = ProtocolId::HealthCheckerRpc;
+    let data = bcs::to_bytes(&HealthCheckerMsg::Ping(Ping(ping)))
         .unwrap()
         .into();
     let (res_tx, res_rx) = oneshot::channel();
     let inbound_rpc_req = InboundRpcRequest {
-        protocol,
+        protocol_id,
         data,
         res_tx,
     };
@@ -150,7 +149,7 @@ async fn send_inbound_ping(
 
 async fn expect_pong(res_rx: oneshot::Receiver<Result<Bytes, RpcError>>) {
     let res_data = res_rx.await.unwrap().unwrap();
-    match lcs::from_bytes(&res_data).unwrap() {
+    match bcs::from_bytes(&res_data).unwrap() {
         HealthCheckerMsg::Pong(_) => {}
         msg => panic!("Unexpected HealthCheckerMsg: {:?}", msg),
     };
@@ -158,7 +157,7 @@ async fn expect_pong(res_rx: oneshot::Receiver<Result<Bytes, RpcError>>) {
 
 async fn expect_disconnect(
     expected_peer_id: PeerId,
-    connection_reqs_rx: &mut libra_channel::Receiver<PeerId, ConnectionRequest>,
+    connection_reqs_rx: &mut diem_channel::Receiver<PeerId, ConnectionRequest>,
 ) {
     let req = connection_reqs_rx.next().await.unwrap();
     let (peer_id, res_tx) = match req {
@@ -174,22 +173,19 @@ async fn send_new_peer_notification(
     connection_notifs_tx: &mut conn_notifs_channel::Sender,
 ) {
     let (delivered_tx, delivered_rx) = oneshot::channel();
+    let notif = peer_manager::ConnectionNotification::NewPeer(
+        ConnectionMetadata::mock(peer_id),
+        NetworkContext::mock(),
+    );
     connection_notifs_tx
-        .push_with_feedback(
-            peer_id,
-            peer_manager::ConnectionNotification::NewPeer(
-                peer_id,
-                NetworkAddress::from_str("/ip6/::1/tcp/8081").unwrap(),
-            ),
-            Some(delivered_tx),
-        )
+        .push_with_feedback(peer_id, notif, Some(delivered_tx))
         .unwrap();
     delivered_rx.await.unwrap();
 }
 
 #[test]
 fn outbound() {
-    ::libra_logger::Logger::new().environment_only(true).init();
+    ::diem_logger::Logger::init_for_testing();
     let mut rt = Runtime::new().unwrap();
     let (mut network_reqs_rx, _, _, mut connection_notifs_tx, mut ticker_tx) =
         setup_strict_health_checker(&mut rt);
@@ -213,7 +209,7 @@ fn outbound() {
 
 #[test]
 fn inbound() {
-    ::libra_logger::Logger::new().environment_only(true).init();
+    ::diem_logger::Logger::init_for_testing();
     let mut rt = Runtime::new().unwrap();
     let (_network_reqs_rx, mut network_notifs_tx, _, mut connection_notifs_tx, _ticker_tx) =
         setup_strict_health_checker(&mut rt);
@@ -234,7 +230,7 @@ fn inbound() {
 
 #[test]
 fn outbound_failure_permissive() {
-    ::libra_logger::Logger::new().environment_only(true).init();
+    ::diem_logger::Logger::init_for_testing();
     let mut rt = Runtime::new().unwrap();
     let ping_failures_tolerated = 10;
     let (mut network_reqs_rx, _, mut connection_reqs_rx, mut connection_notifs_tx, mut ticker_tx) =
@@ -264,7 +260,7 @@ fn outbound_failure_permissive() {
 
 #[test]
 fn ping_success_resets_fail_counter() {
-    ::libra_logger::Logger::new().environment_only(true).init();
+    ::diem_logger::Logger::init_for_testing();
     let mut rt = Runtime::new().unwrap();
     let failures_triggered = 10;
     let ping_failures_tolerated = 2 * 10;
@@ -310,7 +306,7 @@ fn ping_success_resets_fail_counter() {
 
 #[test]
 fn outbound_failure_strict() {
-    ::libra_logger::Logger::new().environment_only(true).init();
+    ::diem_logger::Logger::init_for_testing();
     let mut rt = Runtime::new().unwrap();
     let (mut network_reqs_rx, _, mut connection_reqs_rx, mut connection_notifs_tx, mut ticker_tx) =
         setup_strict_health_checker(&mut rt);
@@ -337,7 +333,7 @@ fn outbound_failure_strict() {
 
 #[test]
 fn ping_timeout() {
-    ::libra_logger::Logger::new().environment_only(true).init();
+    ::diem_logger::Logger::init_for_testing();
     let mut rt = Runtime::new().unwrap();
     let (mut network_reqs_rx, _, mut connection_reqs_rx, mut connection_notifs_tx, mut ticker_tx) =
         setup_strict_health_checker(&mut rt);

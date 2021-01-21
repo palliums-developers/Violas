@@ -1,5 +1,5 @@
 
-address 0x0 {
+address 0x2 {
 
 module Map {
     native struct T<K, V>;
@@ -18,10 +18,9 @@ module Map {
 
 }
 
-address 0x1 {
+address 0x2 {
 
 module Token {
-    use 0x0::Transaction;
 
     resource struct Coin<AssetType: copyable> {
         type: AssetType,
@@ -43,38 +42,37 @@ module Token {
     }
 
     public fun withdraw<ATy: copyable>(coin: &mut Coin<ATy>, amount: u64): Coin<ATy> {
-        Transaction::assert(coin.value >= amount, 10);
+        assert(coin.value >= amount, 10);
         coin.value = coin.value - amount;
         Coin { type: *&coin.type, value: amount }
     }
 
-    public fun join<ATy: copyable>(coin1: Coin<ATy>, coin2: Coin<ATy>): Coin<ATy> {
-        deposit(&mut coin1, coin2);
-        coin1
+    public fun join<ATy: copyable>(xus: Coin<ATy>, coin2: Coin<ATy>): Coin<ATy> {
+        deposit(&mut xus, coin2);
+        xus
     }
 
     public fun deposit<ATy: copyable>(coin: &mut Coin<ATy>, check: Coin<ATy>) {
         let Coin { value, type } = check;
-        Transaction::assert(&coin.type == &type, 42);
+        assert(&coin.type == &type, 42);
         coin.value = coin.value + value;
     }
 
     public fun destroy_zero<ATy: copyable>(coin: Coin<ATy>) {
         let Coin { value, type: _ } = coin;
-        Transaction::assert(value == 0, 11)
+        assert(value == 0, 11)
     }
 
 }
 
 }
 
-address 0x2 {
+address 0x3 {
 
 module OneToOneMarket {
-    use 0x0::Signer;
-    use 0x0::Transaction;
-    use 0x0::Map;
-    use 0x1::Token;
+    use 0x1::Signer;
+    use 0x2::Map;
+    use 0x2::Token;
 
     resource struct Pool<AssetType: copyable> {
         coin: Token::Coin<AssetType>,
@@ -96,7 +94,7 @@ module OneToOneMarket {
 
     fun accept<AssetType: copyable>(account: &signer, init: Token::Coin<AssetType>) {
         let sender = Signer::address_of(account);
-        Transaction::assert(!exists<Pool<AssetType>>(sender), 42);
+        assert(!exists<Pool<AssetType>>(sender), 42);
         move_to(account, Pool<AssetType> { coin: init })
     }
 
@@ -129,7 +127,7 @@ module OneToOneMarket {
     ): Token::Coin<Out>
         acquires Price, Pool, DepositRecord, BorrowRecord
     {
-        Transaction::assert(amount <= max_borrow_amount<In, Out>(account, pool_owner), 1025);
+        assert(amount <= max_borrow_amount<In, Out>(account, pool_owner), 1025);
 
         update_borrow_record<In, Out>(account, pool_owner, amount);
 
@@ -214,9 +212,8 @@ module OneToOneMarket {
 address 0x70DD {
 
 module ToddNickles {
-    use 0x1::Token;
-    use 0x0::Signer;
-    use 0x0::Transaction;
+    use 0x2::Token;
+    use 0x1::Signer;
 
     struct T {}
 
@@ -225,12 +222,12 @@ module ToddNickles {
     }
 
     public fun init(account: &signer) {
-        Transaction::assert(Signer::address_of(account) == 0x70DD, 42);
+        assert(Signer::address_of(account) == 0x70DD, 42);
         move_to(account, Wallet { nickles: Token::create(T{}, 0) })
     }
 
     public fun mint(account: &signer): Token::Coin<T> {
-        Transaction::assert(Signer::address_of(account) == 0x70DD, 42);
+        assert(Signer::address_of(account) == 0x70DD, 42);
         Token::create(T{}, 5)
     }
 

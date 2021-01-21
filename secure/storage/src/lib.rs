@@ -1,12 +1,8 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #![forbid(unsafe_code)]
 
-use libra_config::config::SecureBackend;
-use std::convert::From;
-
-pub mod config;
 mod crypto_kv_storage;
 mod crypto_storage;
 mod error;
@@ -17,7 +13,6 @@ mod namespaced_storage;
 mod on_disk;
 mod policy;
 mod storage;
-mod value;
 mod vault;
 
 pub use crate::{
@@ -25,51 +20,32 @@ pub use crate::{
     crypto_storage::{CryptoStorage, PublicKeyResponse},
     error::Error,
     github::GitHubStorage,
-    in_memory::{InMemoryStorage, InMemoryStorageInternal},
+    in_memory::InMemoryStorage,
     kv_storage::{GetResponse, KVStorage},
     namespaced_storage::NamespacedStorage,
-    on_disk::{OnDiskStorage, OnDiskStorageInternal},
+    on_disk::OnDiskStorage,
     policy::{Capability, Identity, Permission, Policy},
-    storage::BoxedStorage,
-    value::Value,
+    storage::Storage,
     vault::VaultStorage,
 };
 
-impl From<&SecureBackend> for BoxedStorage {
-    fn from(backend: &SecureBackend) -> Self {
-        match backend {
-            SecureBackend::GitHub(config) => {
-                let storage = GitHubStorage::new(
-                    config.owner.clone(),
-                    config.repository.clone(),
-                    config.token.read_token().expect("Unable to read token"),
-                );
-                if let Some(namespace) = &config.namespace {
-                    BoxedStorage::from(NamespacedStorage::new(Box::new(storage), namespace.clone()))
-                } else {
-                    BoxedStorage::from(storage)
-                }
-            }
-            SecureBackend::InMemoryStorage => BoxedStorage::from(InMemoryStorage::new()),
-            SecureBackend::OnDiskStorage(config) => {
-                let storage = OnDiskStorage::new(config.path());
-                if let Some(namespace) = &config.namespace {
-                    BoxedStorage::from(NamespacedStorage::new(Box::new(storage), namespace.clone()))
-                } else {
-                    BoxedStorage::from(storage)
-                }
-            }
-            SecureBackend::Vault(config) => BoxedStorage::from(VaultStorage::new(
-                config.server.clone(),
-                config.token.read_token().expect("Unable to read token"),
-                config.namespace.clone(),
-                config
-                    .ca_certificate
-                    .as_ref()
-                    .map(|_| config.ca_certificate().unwrap()),
-            )),
-        }
-    }
+// Some common serializations for interacting with bytes these must be manually added to types via:
+// #[serde(serialize_with = "to_base64", deserialize_with = "from_base64")]
+// some_value: Vec<u8>
+
+pub fn to_base64<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&base64::encode(bytes))
+}
+
+pub fn from_base64<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+    base64::decode(s).map_err(serde::de::Error::custom)
 }
 
 #[cfg(test)]

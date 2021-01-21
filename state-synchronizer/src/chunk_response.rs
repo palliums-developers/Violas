@@ -1,7 +1,7 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use libra_types::{
+use diem_types::{
     ledger_info::LedgerInfoWithSignatures,
     transaction::{TransactionListWithProof, Version},
 };
@@ -11,11 +11,19 @@ use std::fmt;
 /// The response can carry different LedgerInfo types depending on whether the verification
 /// is done via the local trusted validator set or a local waypoint.
 #[allow(clippy::large_enum_variant)]
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ResponseLedgerInfo {
     /// A typical response carries a LedgerInfo with signatures that should be verified using the
     /// local trusted validator set.
     VerifiableLedgerInfo(LedgerInfoWithSignatures),
+    /// A response to `TargetType::HighestAvailable` chunk request type.
+    ProgressiveLedgerInfo {
+        // LedgerInfo that the corresponding GetChunkResponse is built relative to.
+        target_li: LedgerInfoWithSignatures,
+        // LedgerInfo for a version later than that of `target_li`
+        // If `None`, this is the same as `target_li`
+        highest_li: Option<LedgerInfoWithSignatures>,
+    },
     /// During the initial catchup upon startup the chunks carry LedgerInfo that is verified
     /// using the local waypoint.
     LedgerInfoForWaypoint {
@@ -31,6 +39,9 @@ impl ResponseLedgerInfo {
     pub fn version(&self) -> Version {
         match self {
             ResponseLedgerInfo::VerifiableLedgerInfo(li) => li.ledger_info().version(),
+            ResponseLedgerInfo::ProgressiveLedgerInfo { target_li, .. } => {
+                target_li.ledger_info().version()
+            }
             ResponseLedgerInfo::LedgerInfoForWaypoint { waypoint_li, .. } => {
                 waypoint_li.ledger_info().version()
             }
@@ -38,14 +49,14 @@ impl ResponseLedgerInfo {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 /// The returned chunk is bounded by the end of the known_epoch of the requester
 /// (i.e., a chunk never crosses epoch boundaries).
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GetChunkResponse {
-    /// The proofs are built relative to the LedgerInfo in `response_ledger_info`.
+    /// The proofs are built relative to the LedgerInfo in `response_li`.
     /// The specifics of ledger info verification depend on its type.
     pub response_li: ResponseLedgerInfo,
-    /// chunk of transactions with proof corresponding to the ledger info carried by the response.
+    /// Chunk of transactions with proof corresponding to the ledger info carried by the response.
     pub txn_list_with_proof: TransactionListWithProof,
 }
 
@@ -61,20 +72,37 @@ impl GetChunkResponse {
     }
 }
 
+impl fmt::Debug for GetChunkResponse {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
 impl fmt::Display for GetChunkResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let txns_repr = match self.txn_list_with_proof.first_transaction_version {
             None => "empty".to_string(),
-            Some(first_ver) => format!(
-                "versions [{} - {}]",
-                first_ver,
-                first_ver - 1 + self.txn_list_with_proof.len() as u64
-            ),
+            Some(first_version) => {
+                let last_version = first_version
+                    .checked_add(self.txn_list_with_proof.len() as u64)
+                    .and_then(|v| v.checked_sub(1)) // last_version = first_version + txns.len() - 1
+                    .map(|v| format!("{}", v)) // format last_version as a string
+                    .unwrap_or_else(|| "Last version has overflown!".into());
+                format!("versions [{} - {}]", first_version, last_version)
+            }
         };
         let response_li_repr = match &self.response_li {
             ResponseLedgerInfo::VerifiableLedgerInfo(li) => {
                 format!("[verifiable LI {}]", li.ledger_info())
             }
+            ResponseLedgerInfo::ProgressiveLedgerInfo {
+                target_li,
+                highest_li,
+            } => format!(
+                "[progressive LI: target LI {}, highest LI {}]",
+                target_li.ledger_info(),
+                highest_li.as_ref().unwrap_or(target_li).ledger_info(),
+            ),
             ResponseLedgerInfo::LedgerInfoForWaypoint {
                 waypoint_li,
                 end_of_epoch_li,

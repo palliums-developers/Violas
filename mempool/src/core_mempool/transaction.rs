@@ -1,18 +1,22 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use libra_types::{account_address::AccountAddress, transaction::SignedTransaction};
+use diem_types::{
+    account_address::AccountAddress,
+    transaction::{GovernanceRole, SignedTransaction},
+};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 #[derive(Clone)]
 pub struct MempoolTransaction {
     pub txn: SignedTransaction,
-    // system expiration time of transaction. It should be removed from mempool by that time
+    // System expiration time of the transaction. It should be removed from mempool by that time.
     pub expiration_time: Duration,
     pub gas_amount: u64,
     pub ranking_score: u64,
     pub timeline_state: TimelineState,
-    pub is_governance_txn: bool,
+    pub governance_role: GovernanceRole,
 }
 
 impl MempoolTransaction {
@@ -22,7 +26,7 @@ impl MempoolTransaction {
         gas_amount: u64,
         ranking_score: u64,
         timeline_state: TimelineState,
-        is_governance_txn: bool,
+        governance_role: GovernanceRole,
     ) -> Self {
         Self {
             txn,
@@ -30,7 +34,7 @@ impl MempoolTransaction {
             ranking_score,
             expiration_time,
             timeline_state,
-            is_governance_txn,
+            governance_role,
         }
     }
     pub(crate) fn get_sequence_number(&self) -> u64 {
@@ -44,15 +48,14 @@ impl MempoolTransaction {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize, Hash, Serialize)]
 pub enum TimelineState {
-    // transaction is ready for broadcast
-    // Associated integer represents it's position in log of such transactions
+    // The transaction is ready for broadcast.
+    // Associated integer represents it's position in the log of such transactions.
     Ready(u64),
-    // transaction is not yet ready for broadcast
-    // but it might change in a future
+    // Transaction is not yet ready for broadcast, but it might change in a future.
     NotReady,
-    // transaction will never be qualified for broadcasting
-    // currently we don't broadcast transactions originated on other peers
+    // Transaction will never be qualified for broadcasting.
+    // Currently we don't broadcast transactions originated on other peers.
     NonQualified,
 }

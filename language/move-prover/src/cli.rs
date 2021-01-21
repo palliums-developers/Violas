@@ -1,19 +1,26 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #![forbid(unsafe_code)]
 
 //! Functionality related to the command line interface of the Move prover.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use anyhow::anyhow;
 use clap::{App, Arg};
-use docgen::docgen::DocgenOptions;
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 use simplelog::{
     CombinedLogger, Config, ConfigBuilder, LevelPadding, SimpleLogger, TermLogger, TerminalMode,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+
+use abigen::AbigenOptions;
+use boogie_backend::options::BoogieOptions;
+use bytecode::options::ProverOptions;
+use docgen::DocgenOptions;
+use errmapgen::ErrmapOptions;
+use move_model::model::VerificationScope;
 
 /// Represents the virtual path to the boogie prelude which is inlined into the binary.
 pub const INLINE_PRELUDE: &str = "<inline-prelude>";
@@ -23,10 +30,8 @@ pub const INLINE_PRELUDE: &str = "<inline-prelude>";
 const DEFAULT_BOOGIE_FLAGS: &[&str] = &[
     "-doModSetAnalysis",
     "-printVerifiedProceduresCount:0",
-    "-printModel:4",
-    // Right now, we let boogie only produce one error per procedure. The boogie wrapper isn't
-    // capable to sort out multiple errors and associate them with models otherwise.
-    "-errorLimit:1",
+    "-printModel:1",
+    "-enhancedErrorMessages:1",
 ];
 
 /// Atomic used to prevent re-initialization of logging.
@@ -34,23 +39,6 @@ static LOGGER_CONFIGURED: AtomicBool = AtomicBool::new(false);
 
 /// Atomic used to detect whether we are running in test mode.
 static TEST_MODE: AtomicBool = AtomicBool::new(false);
-
-/// Default for what functions to verify.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum VerificationScope {
-    /// Verify only public functions.
-    Public,
-    /// Verify all functions.
-    All,
-    /// Verify no functions
-    None,
-}
-
-impl Default for VerificationScope {
-    fn default() -> Self {
-        Self::Public
-    }
-}
 
 /// Represents options provided to the tool. Most of those options are configured via a toml
 /// source; some over the command line flags.
@@ -66,6 +54,10 @@ pub struct Options {
     pub verbosity_level: LevelFilter,
     /// Whether to run the documentation generator instead of the prover.
     pub run_docgen: bool,
+    /// Whether to run the ABI generator instead of the prover.
+    pub run_abigen: bool,
+    /// Whether to run the error map generator instead of the prover.
+    pub run_errmapgen: bool,
     /// An account address to use if none is specified in the source.
     pub account_address: String,
     /// The paths to the Move sources.
@@ -76,9 +68,17 @@ pub struct Options {
     /// Options for the prover.
     pub prover: ProverOptions,
     /// Options for the prover backend.
-    pub backend: BackendOptions,
+    pub backend: BoogieOptions,
+    /// Whether to use the v2 translation schema.
+    pub trans_v2: bool,
     /// Options for the documentation generator.
     pub docgen: DocgenOptions,
+    /// Options for the ABI generator.
+    pub abigen: AbigenOptions,
+    /// Options for the error map generator.
+    /// TODO: this currently create errors during deserialization, so skip them for this.
+    #[serde(skip_serializing)]
+    pub errmapgen: ErrmapOptions,
 }
 
 impl Default for Options {
@@ -87,108 +87,18 @@ impl Default for Options {
             prelude_path: INLINE_PRELUDE.to_string(),
             output_path: "output.bpl".to_string(),
             run_docgen: false,
+            run_abigen: false,
+            run_errmapgen: false,
             account_address: "0x234567".to_string(),
             verbosity_level: LevelFilter::Info,
             move_sources: vec![],
             move_deps: vec![],
-            docgen: DocgenOptions::default(),
             prover: ProverOptions::default(),
-            backend: BackendOptions::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ProverOptions {
-    /// Whether to only generate backend code.
-    pub generate_only: bool,
-    /// Whether to generate stubs for native functions.
-    pub native_stubs: bool,
-    /// Whether to minimize execution traces in errors.
-    pub minimize_execution_trace: bool,
-    /// Whether to omit debug information in generated model.
-    pub omit_model_debug: bool,
-    /// Whether output for e.g. diagnosis shall be stable/redacted so it can be used in test
-    /// output.
-    pub stable_test_output: bool,
-    /// Scope of what functions to verify.
-    pub verify_scope: VerificationScope,
-    /// Whether to emit global axiom that resources are well-formed.
-    pub resource_wellformed_axiom: bool,
-    /// Whether to automatically debug trace values of specification expression leafs.
-    pub debug_trace: bool,
-}
-
-impl Default for ProverOptions {
-    fn default() -> Self {
-        Self {
-            generate_only: false,
-            native_stubs: false,
-            minimize_execution_trace: true,
-            omit_model_debug: false,
-            stable_test_output: false,
-            verify_scope: VerificationScope::Public,
-            resource_wellformed_axiom: true,
-            debug_trace: false,
-        }
-    }
-}
-
-/// Backend options.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct BackendOptions {
-    /// Path to the boogie executable.
-    pub boogie_exe: String,
-    /// Path to the z3 executable.
-    pub z3_exe: String,
-    /// Whether to use cvc4.
-    pub use_cvc4: bool,
-    /// Path to the cvc4 executable.
-    pub cvc4_exe: String,
-    /// List of flags to pass on to boogie.
-    pub boogie_flags: Vec<String>,
-    /// Whether to use native array theory.
-    pub use_array_theory: bool,
-    /// Whether to produce an SMT file for each verification problem.
-    pub generate_smt: bool,
-    /// Whether native instead of stratified equality should be used.
-    pub native_equality: bool,
-    /// A string determining the type of requires used for parameter type checks. Can be
-    /// `"requires"` or `"free requires`".
-    pub type_requires: String,
-    /// The depth until which stratified functions are expanded.
-    pub stratification_depth: usize,
-    /// A string to be used to inline a function of medium size. Can be empty or `{:inline}`.
-    pub aggressive_func_inline: String,
-    /// A string to be used to inline a function of small size. Can be empty or `{:inline}`.
-    pub func_inline: String,
-    /// A bound to apply to the length of serialization results.
-    pub serialize_bound: usize,
-    /// How many times to call the prover backend for the verification problem. This is used for
-    /// benchmarking.
-    pub bench_repeat: usize,
-}
-
-impl Default for BackendOptions {
-    fn default() -> Self {
-        let get_env = |s| std::env::var(s).unwrap_or_else(|_| String::new());
-        Self {
-            bench_repeat: 1,
-            boogie_exe: get_env("BOOGIE_EXE"),
-            z3_exe: get_env("Z3_EXE"),
-            use_cvc4: false,
-            cvc4_exe: get_env("CVC4_EXE"),
-            boogie_flags: vec![],
-            use_array_theory: false,
-            generate_smt: false,
-            native_equality: false,
-            type_requires: "free requires".to_owned(),
-            stratification_depth: 4,
-            aggressive_func_inline: "".to_owned(),
-            func_inline: "{:inline}".to_owned(),
-            serialize_bound: 4,
+            backend: BoogieOptions::default(),
+            trans_v2: false,
+            docgen: DocgenOptions::default(),
+            abigen: AbigenOptions::default(),
+            errmapgen: ErrmapOptions::default(),
         }
     }
 }
@@ -217,7 +127,7 @@ impl Options {
         let cli = App::new("mvp")
             .version("0.1.0")
             .about("The Move Prover")
-            .author("The Libra Core Contributors")
+            .author("The Diem Core Contributors")
             .arg(
                 Arg::with_name("config")
                     .short("c")
@@ -263,9 +173,15 @@ impl Options {
             )
             .arg(
                 Arg::with_name("generate-only")
-                    .short("g")
                     .long("generate-only")
+                    .short("g")
                     .help("only generate boogie file but do not call boogie"),
+            )
+            .arg(
+                Arg::with_name("warn")
+                    .long("warn")
+                    .short("w")
+                    .help("produces warnings")
             )
             .arg(
                 Arg::with_name("trace")
@@ -274,10 +190,78 @@ impl Options {
                     .help("enables automatic tracing of expressions in prover errors")
             )
             .arg(
+                Arg::with_name("keep")
+                    .long("keep")
+                    .short("k")
+                    .help("keep intermediate artifacts of the backend around")
+            )
+            .arg(
+                Arg::with_name("trans_v2")
+                    .long("v2")
+                    .help("whether to use the new v2 translation and backend")
+            )
+            .arg(
+                Arg::with_name("negative")
+                    .long("negative")
+                    .help("run negative verification checks")
+            ).arg(
+                Arg::with_name("seed")
+                    .long("seed")
+                    .short("s")
+                    .takes_value(true)
+                    .value_name("NUMBER")
+                    .validator(is_number)
+                    .help("sets a random seed for the prover (default 0)")
+            )
+            .arg(
+                Arg::with_name("cores")
+                    .long("cores")
+                    .takes_value(true)
+                    .value_name("NUMBER")
+                    .validator(is_number)
+                    .help("sets the number of cores to use. \
+                     NOTE: multiple cores may currently lead to scrambled model \
+                     output from boogie (default 1)")
+            )
+            .arg(
+                Arg::with_name("timeout")
+                    .long("timeout")
+                    .short("T")
+                    .takes_value(true)
+                    .value_name("NUMBER")
+                    .validator(is_number)
+                    .help("sets a timeout (in seconds) for each \
+                             individual verification condition (default 40)")
+            )
+            .arg(
                 Arg::with_name("docgen")
                     .long("docgen")
                     .help("run the documentation generator instead of the prover. \
                     Generated docs will be written into the directory `./doc` unless configured otherwise via toml"),
+            )
+            .arg(
+                Arg::with_name("docgen-template")
+                    .long("docgen-template")
+                    .takes_value(true)
+                    .value_name("FILE")
+                    .help("a template for documentation generation."),
+            )
+            .arg(
+                Arg::with_name("abigen")
+                    .long("abigen")
+                    .help("run the ABI generator instead of the prover. \
+                    Generated ABIs will be written into the directory `./abi` unless configured otherwise via toml"),
+            )
+            .arg(
+                Arg::with_name("errmapgen")
+                    .long("errmapgen")
+                    .help("run the error map generator instead of the prover. \
+                    The generated error map will be written to `errmap` unless configured otherwise"),
+            )
+            .arg(
+                Arg::with_name("packedtypesgen")
+                    .long("packedtypesgen")
+                    .help("run the packed types generator instead of the prover.")
             )
             .arg(
                 Arg::with_name("verify")
@@ -316,6 +300,45 @@ impl Options {
                     .min_values(1)
                     .help("the source files to verify"),
             )
+            .arg(
+                Arg::with_name("eager-threshold")
+                    .long("eager-threshold")
+                    .takes_value(true)
+                    .value_name("NUMBER")
+                    .validator(is_number)
+                    .help("sets the eager threshold for quantifier instantiation (default 100)")
+            )
+            .arg(
+                Arg::with_name("lazy-threshold")
+                    .long("lazy-threshold")
+                    .takes_value(true)
+                    .value_name("NUMBER")
+                    .validator(is_number)
+                    .help("sets the lazy threshold for quantifier instantiation (default 100)")
+            )
+            .arg(
+                Arg::with_name("dump-bytecode")
+                    .long("dump-bytecode")
+                    .help("whether to dump the transformed bytecode to a file")
+            )
+            .arg(
+                Arg::with_name("num-instances")
+                    .long("num-instances")
+                    .takes_value(true)
+                    .value_name("NUMBER")
+                    .validator(is_number)
+                    .help("sets the number of Boogie instances to run concurrently (default 1)")
+            )
+            .arg(
+                Arg::with_name("sequential")
+                    .long("sequential")
+                    .help("whether to run the Boogie instances sequentially")
+            )
+            .arg(
+                Arg::with_name("use-cvc4")
+                    .long("use-cvc4")
+                    .help("use cvc4 solver instead of z3")
+            )
             .after_help("More options available via `--config file` or `--config-str str`. \
             Use `--print-config` to see format and current values. \
             See `move-prover/src/cli.rs::Option` for documentation.");
@@ -333,10 +356,16 @@ impl Options {
         };
 
         let mut options = if matches.is_present("config") {
+            if matches.is_present("config-str") {
+                return Err(anyhow!(
+                    "currently, if `--config` (including via $MOVE_PROVER_CONFIG) is given \
+                       `--config-str` cannot be used. Consider editing your \
+                       configuration file instead."
+                ));
+            }
             Self::create_from_toml_file(matches.value_of("config").unwrap())?
         } else if matches.is_present("config-str") {
-            let config_lines = get_vec("config-str").join("\n");
-            Self::create_from_toml(&config_lines)?
+            Self::create_from_toml(matches.value_of("config-str").unwrap())?
         } else {
             Options::default()
         };
@@ -353,6 +382,9 @@ impl Options {
                 "debug" => LevelFilter::Debug,
                 _ => unreachable!("should not happen"),
             }
+        }
+        if matches.is_present("generate-only") {
+            options.prover.generate_only = true;
         }
         if matches.occurrences_of("sources") > 0 {
             options.move_sources = get_vec("sources");
@@ -375,8 +407,70 @@ impl Options {
         if matches.is_present("docgen") {
             options.run_docgen = true;
         }
+        if matches.is_present("docgen-template") {
+            options.run_docgen = true;
+            options.docgen.root_doc_templates = vec![matches
+                .value_of("docgen-template")
+                .map(|s| s.to_string())
+                .unwrap()]
+        }
+        if matches.is_present("abigen") {
+            options.run_abigen = true;
+        }
+        if matches.is_present("errmapgen") {
+            options.run_errmapgen = true;
+        }
+        if matches.is_present("warn") {
+            options.prover.report_warnings = true;
+        }
         if matches.is_present("trace") {
             options.prover.debug_trace = true;
+        }
+        if matches.is_present("dump-bytecode") {
+            options.prover.dump_bytecode = true;
+        }
+        if matches.is_present("num-instances") {
+            let num_instances = matches
+                .value_of("num-instances")
+                .unwrap()
+                .parse::<usize>()?;
+            options.prover.num_instances = std::cmp::max(num_instances, 1); // at least one instance
+        }
+        if matches.is_present("sequential") {
+            options.prover.sequential_task = true;
+        }
+        if matches.is_present("keep") {
+            options.backend.keep_artifacts = true;
+        }
+        if matches.is_present("trans_v2") {
+            options.trans_v2 = true;
+        }
+        if matches.is_present("negative") {
+            options.prover.negative_checks = true;
+        }
+        if matches.is_present("seed") {
+            options.backend.random_seed = matches.value_of("seed").unwrap().parse::<usize>()?;
+        }
+        if matches.is_present("timeout") {
+            options.backend.vc_timeout = matches.value_of("timeout").unwrap().parse::<usize>()?;
+        }
+        if matches.is_present("cores") {
+            options.backend.proc_cores = matches.value_of("cores").unwrap().parse::<usize>()?;
+        }
+        if matches.is_present("eager-threshold") {
+            options.backend.eager_threshold = matches
+                .value_of("eager-threshold")
+                .unwrap()
+                .parse::<usize>()?;
+        }
+        if matches.is_present("lazy-threshold") {
+            options.backend.lazy_threshold = matches
+                .value_of("lazy-threshold")
+                .unwrap()
+                .parse::<usize>()?;
+        }
+        if matches.is_present("use-cvc4") {
+            options.backend.use_cvc4 = true;
         }
         if matches.is_present("print-config") {
             println!("{}", toml::to_string(&options).unwrap());
@@ -415,6 +509,11 @@ impl Options {
         let mut result = vec![self.backend.boogie_exe.clone()];
         let mut add = |sl: &[&str]| result.extend(sl.iter().map(|s| (*s).to_string()));
         add(DEFAULT_BOOGIE_FLAGS);
+        if !self.prover.negative_checks {
+            // Right now, we let boogie only produce one error per procedure. The boogie wrapper isn't
+            // capable to sort out multiple errors and associate them with models otherwise.
+            add(&["-errorLimit:1"]);
+        }
         if self.backend.use_cvc4 {
             add(&[
                 "-proverOpt:SOLVER=cvc4",
@@ -424,10 +523,30 @@ impl Options {
             add(&[&format!("-proverOpt:PROVER_PATH={}", &self.backend.z3_exe)]);
         }
         if self.backend.use_array_theory {
-            add(&["-useArrayTheory"]);
+            add(&[
+                "-useArrayTheory",
+                "/proverOpt:O:smt.array.extensional=false",
+            ]);
+        } else {
+            add(&[&format!(
+                "-proverOpt:O:smt.QI.EAGER_THRESHOLD={}",
+                self.backend.eager_threshold
+            )]);
+            add(&[&format!(
+                "-proverOpt:O:smt.QI.LAZY_THRESHOLD={}",
+                self.backend.lazy_threshold
+            )]);
         }
-        add(&["-proverOpt:O:smt.QI.EAGER_THRESHOLD=100"]);
-        add(&["-proverOpt:O:smt.QI.LAZY_THRESHOLD=100"]);
+        add(&[&format!(
+            "-vcsCores:{}",
+            if self.prover.stable_test_output {
+                // Do not use multiple cores if stable test output is requested.
+                // Error messages may appear in non-deterministic order otherwise.
+                1
+            } else {
+                self.backend.proc_cores
+            }
+        )]);
         // TODO: see what we can make out of these flags.
         //add(&["-proverOpt:O:smt.QI.PROFILE=true"]);
         //add(&["-proverOpt:O:trace=true"]);
@@ -446,5 +565,20 @@ impl Options {
     /// Returns name of file where to log boogie output.
     pub fn get_boogie_log_file(&self, boogie_file: &str) -> String {
         format!("{}.log", boogie_file)
+    }
+
+    /// Adjust a timeout value, given in seconds, for the runtime environment.
+    pub fn adjust_timeout(&self, time: usize) -> usize {
+        // If running on a Linux flavor as in Ci, add 100% to the timeout for added
+        // robustness against flakiness.
+        match std::env::consts::OS {
+            "linux" | "freebsd" | "openbsd" => time + time,
+            _ => time,
+        }
+    }
+
+    /// Convenience function to enable debugging (like high verbosity) on this instance.
+    pub fn enable_debug(&mut self) {
+        self.verbosity_level = LevelFilter::Debug;
     }
 }

@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -23,8 +23,6 @@ pub struct AccountResource {
     received_events: EventHandle,
     sent_events: EventHandle,
     sequence_number: u64,
-    is_frozen: bool,
-    role_id: u64,
 }
 
 impl AccountResource {
@@ -36,8 +34,6 @@ impl AccountResource {
         key_rotation_capability: Option<KeyRotationCapabilityResource>,
         sent_events: EventHandle,
         received_events: EventHandle,
-        is_frozen: bool,
-        role_id: u64,
     ) -> Self {
         AccountResource {
             sequence_number,
@@ -46,8 +42,6 @@ impl AccountResource {
             authentication_key,
             sent_events,
             received_events,
-            is_frozen,
-            role_id,
         }
     }
 
@@ -79,16 +73,6 @@ impl AccountResource {
     /// Return the received_events handle for the given AccountResource
     pub fn received_events(&self) -> &EventHandle {
         &self.received_events
-    }
-
-    /// Return the the is_frozen flag for the given AccountResource
-    pub fn is_frozen(&self) -> bool {
-        self.is_frozen
-    }
-
-    /// Return the the is_frozen flag for the given AccountResource
-    pub fn role_id(&self) -> u64 {
-        self.role_id
     }
 }
 

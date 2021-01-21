@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #![forbid(unsafe_code)]
@@ -7,20 +7,20 @@ use crate::{
     cluster::Cluster,
     health::{log_tail::TraceTail, Commit, Event, LogTail, ValidatorEvent},
     instance::Instance,
-    util::unix_timestamp_now,
 };
-use debug_interface::{json_log::JsonLogEntry as DebugInterfaceEvent, AsyncNodeDebugClient};
-use libra_logger::*;
+use debug_interface::AsyncNodeDebugClient;
+use diem_infallible::{duration_since_epoch, Mutex};
+use diem_logger::{json_log::JsonLogEntry as DebugInterfaceEvent, *};
 use serde_json::{self, value as json};
 use std::{
     env,
     sync::{
         atomic::{AtomicBool, AtomicI64, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc, Arc,
     },
     time::Duration,
 };
-use tokio::{runtime::Runtime, time};
+use tokio::{runtime::Handle, time};
 
 pub struct DebugPortLogWorker {
     instance: Instance,
@@ -33,22 +33,17 @@ pub struct DebugPortLogWorker {
 }
 
 impl DebugPortLogWorker {
-    pub fn spawn_new(cluster: &Cluster, runtime: &Runtime) -> (LogTail, TraceTail) {
+    pub fn spawn_new(cluster: &Cluster) -> (LogTail, TraceTail) {
+        let runtime = Handle::current();
         let (event_sender, event_receiver) = mpsc::channel();
         let mut started_receivers = vec![];
         let pending_messages = Arc::new(AtomicI64::new(0));
         let (trace_sender, trace_receiver) = mpsc::channel();
         let trace_enabled = Arc::new(AtomicBool::new(false));
-        let http_client = reqwest::Client::new();
-        for instance in cluster.all_instances() {
+        for instance in cluster.validator_and_fullnode_instances() {
             let (started_sender, started_receiver) = mpsc::channel();
             started_receivers.push(started_receiver);
-            let debug_interface_port = instance
-                .debug_interface_port()
-                .expect("Debug interface port is not found")
-                as u16;
-            let client =
-                AsyncNodeDebugClient::new(http_client.clone(), instance.ip(), debug_interface_port);
+            let client = instance.debug_interface_client();
             let debug_port_log_worker = DebugPortLogWorker {
                 instance: instance.clone(),
                 client,
@@ -87,7 +82,7 @@ impl DebugPortLogWorker {
                     if print_failures {
                         info!("Failed to get events from {}: {:?}", self.instance, e);
                     }
-                    time::delay_for(Duration::from_secs(1)).await;
+                    time::sleep(Duration::from_secs(1)).await;
                 }
                 Ok(resp) => {
                     let mut sent_events = 0i64;
@@ -99,7 +94,7 @@ impl DebugPortLogWorker {
                     }
                     self.pending_messages
                         .fetch_add(sent_events, Ordering::Relaxed);
-                    time::delay_for(Duration::from_millis(100)).await;
+                    time::sleep(Duration::from_millis(100)).await;
                 }
             }
             if let Some(started_sender) = self.started_sender.take() {
@@ -123,7 +118,7 @@ impl DebugPortLogWorker {
         Some(ValidatorEvent {
             validator: self.instance.peer_name().clone(),
             timestamp: Duration::from_millis(event.timestamp as u64),
-            received_timestamp: unix_timestamp_now(),
+            received_timestamp: duration_since_epoch(),
             event: e,
         })
     }
@@ -136,6 +131,11 @@ impl DebugPortLogWorker {
                 .as_str()
                 .expect("block_id is not string")
                 .to_string(),
+            epoch: json
+                .get("epoch")
+                .expect("No epoch in commit event")
+                .as_u64()
+                .expect("epoch is not u64"),
             round: json
                 .get("round")
                 .expect("No round in commit event")

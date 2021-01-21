@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Add an associated constant to an enum describing the number of variants it has.
@@ -60,7 +60,7 @@ fn compute_num_variants(data: &Data, span: Span) -> Result<usize> {
 /// Computes the name of the constant.
 fn compute_const_name(attrs: Vec<Attribute>) -> Result<Ident> {
     let mut const_names: Vec<_> = attrs
-        .into_iter()
+        .iter()
         .filter(|attr| attr.path.is_ident("num_variants"))
         .map(|attr| match attr.parse_meta() {
             Ok(Meta::NameValue(MetaNameValue {

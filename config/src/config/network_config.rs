@@ -1,57 +1,103 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    config::{PersistableConfig, RoleType, RootPath, SecureBackend},
-    keys::KeyPair,
+    config::{Error, RoleType, SecureBackend},
+    keys::ConfigKey,
     network_id::NetworkId,
     utils,
 };
-use anyhow::{anyhow, ensure, Result};
-use libra_crypto::{x25519, Uniform};
-use libra_network_address::NetworkAddress;
-use libra_types::{transaction::authenticator::AuthenticationKey, PeerId};
+use diem_crypto::{x25519, Uniform};
+use diem_network_address::NetworkAddress;
+use diem_network_address_encryption::Encryptor;
+use diem_secure_storage::{CryptoStorage, KVStorage, Storage};
+use diem_types::{transaction::authenticator::AuthenticationKey, PeerId};
 use rand::{
     rngs::{OsRng, StdRng},
     Rng, SeedableRng,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, convert::TryFrom, path::PathBuf, string::ToString};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::TryFrom,
+    string::ToString,
+};
 
-const NETWORK_PEERS_DEFAULT: &str = "network_peers.config.toml";
-const SEED_PEERS_DEFAULT: &str = "seed_peers.toml";
-
-/// Current supported protocol negotiation handshake version.
-///
-/// See [`perform_handshake`] in `network/src/transport.rs`
-// TODO(philiphayes): ideally this constant lives somewhere in network/ ...
-// might need to extract into a separate network_constants crate or something.
+// TODO: We could possibly move these constants somewhere else, but since they are defaults for the
+//   configurations of the system, we'll leave it here for now.
+/// Current supported protocol negotiation handshake version. See
+/// [`network::protocols::wire::v1`](../../network/protocols/wire/handshake/v1/index.html).
 pub const HANDSHAKE_VERSION: u8 = 0;
+pub const NETWORK_CHANNEL_SIZE: usize = 1024;
+pub const PING_INTERVAL_MS: u64 = 1000;
+pub const PING_TIMEOUT_MS: u64 = 10_000;
+pub const PING_FAILURES_TOLERATED: u64 = 5;
+pub const CONNECTIVITY_CHECK_INTERVAL_MS: u64 = 5000;
+pub const MAX_CONCURRENT_NETWORK_REQS: usize = 100;
+pub const MAX_CONNECTION_DELAY_MS: u64 = 60_000; /* 1 minute */
+pub const MAX_FULLNODE_OUTBOUND_CONNECTIONS: usize = 3;
+pub const MAX_INBOUND_CONNECTIONS: usize = 100;
+pub const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024; /* 8 MiB */
+pub const CONNECTION_BACKOFF_BASE: u64 = 2;
+pub const INBOUND_IP_BYTE_BUCKET_RATE: usize = MAX_FRAME_SIZE;
+pub const INBOUND_IP_BYTE_BUCKET_SIZE: usize = INBOUND_IP_BYTE_BUCKET_RATE;
 
-#[cfg_attr(any(test, feature = "fuzzing"), derive(Clone, PartialEq))]
-#[derive(Debug, Deserialize, Serialize)]
+pub type SeedPublicKeys = HashMap<PeerId, HashSet<x25519::PublicKey>>;
+pub type SeedAddresses = HashMap<PeerId, Vec<NetworkAddress>>;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NetworkConfig {
+    // Maximum backoff delay for connecting outbound to peers
+    pub max_connection_delay_ms: u64,
+    // Base for outbound connection backoff
+    pub connection_backoff_base: u64,
+    // Rate to check connectivity to connected peers
+    pub connectivity_check_interval_ms: u64,
+    // Size of all network channels
+    pub network_channel_size: usize,
+    // Maximum number of concurrent network requests
+    pub max_concurrent_network_reqs: usize,
+    // Choose a protocol to discover and dial out to other peers on this network.
+    // `DiscoveryMethod::None` disables discovery and dialing out (unless you have
+    // seed peers configured).
+    pub discovery_method: DiscoveryMethod,
+    pub identity: Identity,
     // TODO: Add support for multiple listen/advertised addresses in config.
     // The address that this node is listening on for new connections.
     pub listen_address: NetworkAddress,
-    pub connectivity_check_interval_ms: u64,
     // Select this to enforce that both peers should authenticate each other, otherwise
     // authentication only occurs for outgoing connections.
     pub mutual_authentication: bool,
-    // Leveraged by mutual_authentication for incoming peers that may not have a well-defined
-    // network address.
-    #[serde(skip)]
-    pub network_peers: NetworkPeersConfig,
-    pub network_peers_file: PathBuf,
-    // Initial set of peers to connect to
-    #[serde(skip)]
-    pub seed_peers: SeedPeersConfig,
-    pub seed_peers_file: PathBuf,
-    // Enable this network to use either gossip discovery or onchain discovery.
-    pub discovery_method: DiscoveryMethod,
-    pub identity: Identity,
+    // Used to store network address encryption keys for validator nodes
+    pub network_address_key_backend: Option<SecureBackend>,
     pub network_id: NetworkId,
+    // Addresses of initial peers to connect to. In a mutual_authentication network,
+    // we will extract the public keys from these addresses to set our initial
+    // trusted peers set.
+    pub seed_addrs: SeedAddresses,
+    // Backup for public keys of peers that we'll accept connections from in a
+    // mutual_authentication network. This config field is intended as a fallback
+    // in case some peers don't have well defined addresses.
+    pub seed_pubkeys: SeedPublicKeys,
+    // The maximum size of an inbound or outbound request frame
+    pub max_frame_size: usize,
+    // Enables proxy protocol on incoming connections to get original source addresses
+    pub enable_proxy_protocol: bool,
+    // Interval to send healthcheck pings to peers
+    pub ping_interval_ms: u64,
+    // Timeout until a healthcheck ping is rejected
+    pub ping_timeout_ms: u64,
+    // Number of failed healthcheck pings until a peer is marked unhealthy
+    pub ping_failures_tolerated: u64,
+    // Maximum number of outbound connections, limited by ConnectivityManager
+    pub max_outbound_connections: usize,
+    // Maximum number of outbound connections, limited by PeerManager
+    pub max_inbound_connections: usize,
+    // Inbound rate limiting configuration, if not specified, no rate limiting
+    pub inbound_rate_limit_config: Option<RateLimitConfig>,
+    // Outbound rate limiting configuration, if not specified, no rate limiting
+    pub outbound_rate_limit_config: Option<RateLimitConfig>,
 }
 
 impl Default for NetworkConfig {
@@ -63,16 +109,28 @@ impl Default for NetworkConfig {
 impl NetworkConfig {
     pub fn network_with_id(network_id: NetworkId) -> NetworkConfig {
         let mut config = Self {
-            network_id,
-            listen_address: "/ip4/0.0.0.0/tcp/6180".parse().unwrap(),
-            connectivity_check_interval_ms: 5000,
-            mutual_authentication: false,
             discovery_method: DiscoveryMethod::None,
             identity: Identity::None,
-            network_peers_file: PathBuf::new(),
-            network_peers: NetworkPeersConfig::default(),
-            seed_peers_file: PathBuf::new(),
-            seed_peers: SeedPeersConfig::default(),
+            listen_address: "/ip4/0.0.0.0/tcp/6180".parse().unwrap(),
+            mutual_authentication: false,
+            network_address_key_backend: None,
+            network_id,
+            seed_pubkeys: HashMap::default(),
+            seed_addrs: HashMap::default(),
+            max_frame_size: MAX_FRAME_SIZE,
+            enable_proxy_protocol: false,
+            max_connection_delay_ms: MAX_CONNECTION_DELAY_MS,
+            connectivity_check_interval_ms: CONNECTIVITY_CHECK_INTERVAL_MS,
+            network_channel_size: NETWORK_CHANNEL_SIZE,
+            max_concurrent_network_reqs: MAX_CONCURRENT_NETWORK_REQS,
+            connection_backoff_base: CONNECTION_BACKOFF_BASE,
+            ping_interval_ms: PING_INTERVAL_MS,
+            ping_timeout_ms: PING_TIMEOUT_MS,
+            ping_failures_tolerated: PING_FAILURES_TOLERATED,
+            max_outbound_connections: MAX_FULLNODE_OUTBOUND_CONNECTIONS,
+            max_inbound_connections: MAX_INBOUND_CONNECTIONS,
+            inbound_rate_limit_config: None,
+            outbound_rate_limit_config: None,
         };
         config.prepare_identity();
         config
@@ -80,50 +138,72 @@ impl NetworkConfig {
 }
 
 impl NetworkConfig {
-    /// This clones the underlying data except for the key so that this config can be used as a
-    /// template for another config.
-    pub fn clone_for_template(&self) -> Self {
-        Self {
-            network_id: self.network_id.clone(),
-            listen_address: self.listen_address.clone(),
-            connectivity_check_interval_ms: self.connectivity_check_interval_ms,
-            mutual_authentication: self.mutual_authentication,
-            discovery_method: self.discovery_method.clone(),
-            identity: Identity::None,
-            network_peers_file: self.network_peers_file.clone(),
-            network_peers: self.network_peers.clone(),
-            seed_peers_file: self.seed_peers_file.clone(),
-            seed_peers: self.seed_peers.clone(),
+    pub fn identity_key(&self) -> x25519::PrivateKey {
+        let key = match &self.identity {
+            Identity::FromConfig(config) => Some(config.key.clone().key),
+            Identity::FromStorage(config) => {
+                let storage: Storage = (&config.backend).into();
+                let key = storage
+                    .export_private_key(&config.key_name)
+                    .expect("Unable to read key");
+                let key = x25519::PrivateKey::from_ed25519_private_bytes(&key.to_bytes())
+                    .expect("Unable to convert key");
+                Some(key)
+            }
+            Identity::None => None,
+        };
+        key.expect("identity key should be present")
+    }
+
+    pub fn identity_from_storage(&self) -> IdentityFromStorage {
+        if let Identity::FromStorage(identity) = self.identity.clone() {
+            identity
+        } else {
+            panic!("Invalid identity found, expected a storage identity.");
         }
     }
 
-    pub fn load(&mut self, root_dir: &RootPath, network_role: RoleType) -> Result<()> {
-        if !self.network_peers_file.as_os_str().is_empty() {
-            let path = root_dir.full_path(&self.network_peers_file);
-            self.network_peers = NetworkPeersConfig::load_config(&path)?;
+    pub fn encryptor(&self) -> Encryptor {
+        if let Some(backend) = self.network_address_key_backend.as_ref() {
+            let storage = backend.into();
+            Encryptor::new(storage)
+        } else {
+            Encryptor::for_testing()
         }
-        if !self.seed_peers_file.as_os_str().is_empty() {
-            let path = root_dir.full_path(&self.seed_peers_file);
-            self.seed_peers = SeedPeersConfig::load_config(&path)?;
-            self.seed_peers.verify_libranet_addrs()?;
-        }
+    }
+
+    pub fn load(&mut self, role: RoleType) -> Result<(), Error> {
         if self.listen_address.to_string().is_empty() {
-            self.listen_address = utils::get_local_ip().ok_or_else(|| anyhow!("No local IP"))?;
+            self.listen_address = utils::get_local_ip()
+                .ok_or_else(|| Error::InvariantViolation("No local IP".to_string()))?;
         }
 
-        if network_role.is_validator() {
-            ensure!(
-                self.network_peers_file.as_os_str().is_empty(),
-                "Validators should not define network_peers_file"
-            );
-            ensure!(
-                self.network_peers.peers.is_empty(),
-                "Validators should not define network_peers"
-            );
+        if role == RoleType::Validator {
+            self.network_id = NetworkId::Validator;
+        } else if self.network_id == NetworkId::Validator {
+            return Err(Error::InvariantViolation(
+                "Set NetworkId::Validator network for a non-validator network".to_string(),
+            ));
         }
 
         self.prepare_identity();
         Ok(())
+    }
+
+    pub fn peer_id(&self) -> PeerId {
+        match &self.identity {
+            Identity::FromConfig(config) => Some(config.peer_id),
+            Identity::FromStorage(config) => {
+                let storage: Storage = (&config.backend).into();
+                let peer_id = storage
+                    .get::<PeerId>(&config.peer_id_name)
+                    .expect("Unable to read peer id")
+                    .value;
+                Some(peer_id)
+            }
+            Identity::None => None,
+        }
+        .expect("peer id should be present")
     }
 
     fn prepare_identity(&mut self) {
@@ -132,46 +212,16 @@ impl NetworkConfig {
             Identity::None => {
                 let mut rng = StdRng::from_seed(OsRng.gen());
                 let key = x25519::PrivateKey::generate(&mut rng);
-                let peer_id = AuthenticationKey::try_from(key.public_key().as_slice())
-                    .unwrap()
-                    .derived_address();
+                let peer_id = PeerId::from_identity_public_key(key.public_key());
                 self.identity = Identity::from_config(key, peer_id);
             }
             Identity::FromConfig(config) => {
-                let pubkey = config.keypair.public_key();
-                let peer_id = AuthenticationKey::try_from(pubkey.as_slice())
-                    .unwrap()
-                    .derived_address();
-
-                if config.peer_id == PeerId::default() {
+                let peer_id = PeerId::from_identity_public_key(config.key.public_key());
+                if config.peer_id == PeerId::ZERO {
                     config.peer_id = peer_id;
                 }
             }
         };
-    }
-
-    fn default_path(&self, config_path: &str) -> String {
-        let peer_id = self.identity.peer_id_from_config().unwrap_or_default();
-        format!("{}.{}", peer_id.to_string(), config_path)
-    }
-
-    pub fn save(&mut self, root_dir: &RootPath) -> Result<()> {
-        if self.network_peers != NetworkPeersConfig::default() {
-            if self.network_peers_file.as_os_str().is_empty() {
-                let file_name = self.default_path(NETWORK_PEERS_DEFAULT);
-                self.network_peers_file = PathBuf::from(file_name);
-            }
-            let path = root_dir.full_path(&self.network_peers_file);
-            self.network_peers.save_config(&path)?;
-        }
-
-        if self.seed_peers_file.as_os_str().is_empty() {
-            let file_name = self.default_path(SEED_PEERS_DEFAULT);
-            self.seed_peers_file = PathBuf::from(file_name);
-        }
-        let path = root_dir.full_path(&self.seed_peers_file);
-        self.seed_peers.save_config(&path)?;
-        Ok(())
     }
 
     pub fn random(&mut self, rng: &mut StdRng) {
@@ -190,84 +240,32 @@ impl NetworkConfig {
         self.identity = Identity::from_config(identity_key, peer_id);
     }
 
-    #[cfg(any(test, feature = "fuzzing"))]
-    pub fn peer_id(&self) -> PeerId {
-        self.identity.peer_id_from_config().unwrap()
-    }
-}
-
-// This is separated to another config so that it can be written to its own file
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-pub struct SeedPeersConfig {
-    // All peers config. Key:a unique peer id, will be PK in future, Value: peer discovery info
-    pub seed_peers: HashMap<PeerId, Vec<NetworkAddress>>,
-}
-
-impl SeedPeersConfig {
-    /// Check that all seed peer addresses look like canonical LibraNet addresses
-    pub fn verify_libranet_addrs(&self) -> Result<()> {
-        for (peer_id, addrs) in self.seed_peers.iter() {
+    /// Check that all seed peer addresses look like canonical DiemNet addresses
+    pub fn verify_seed_addrs(&self) -> Result<(), Error> {
+        for (peer_id, addrs) in self.seed_addrs.iter() {
             for addr in addrs {
-                ensure!(
-                    addr.is_libranet_addr(),
-                    "Unexpected seed peer address format: peer_id: {}, addr: '{}'",
-                    peer_id.short_str(),
-                    addr,
-                );
+                crate::config::invariant(
+                    addr.is_diemnet_addr(),
+                    format!(
+                        "Unexpected seed peer address format: peer_id: {}, addr: '{}'",
+                        peer_id.short_str(),
+                        addr,
+                    ),
+                )?;
             }
         }
         Ok(())
     }
 }
 
-#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
-pub struct NetworkPeersConfig {
-    #[serde(flatten)]
-    #[serde(serialize_with = "utils::serialize_ordered_map")]
-    pub peers: HashMap<PeerId, x25519::PublicKey>,
-}
-
-impl std::fmt::Debug for NetworkPeersConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "<{} keys>", self.peers.len())
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "type")]
+#[serde(rename_all = "snake_case")]
 pub enum DiscoveryMethod {
-    // default until we can deprecate
-    Gossip(GossipConfig),
     Onchain,
     None,
 }
 
-impl DiscoveryMethod {
-    pub fn gossip(advertised_address: NetworkAddress) -> Self {
-        DiscoveryMethod::Gossip(GossipConfig {
-            advertised_address,
-            discovery_interval_ms: 1000,
-        })
-    }
-
-    pub fn advertised_address(&self) -> NetworkAddress {
-        if let DiscoveryMethod::Gossip(config) = self {
-            config.advertised_address.clone()
-        } else {
-            panic!("Invalid discovery method");
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct GossipConfig {
-    // The address that this node advertises to other nodes for the discovery protocol.
-    pub advertised_address: NetworkAddress,
-    pub discovery_interval_ms: u64,
-}
-
-#[cfg_attr(any(test, feature = "fuzzing"), derive(Clone, PartialEq))]
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum Identity {
     FromConfig(IdentityFromConfig),
@@ -277,163 +275,56 @@ pub enum Identity {
 
 impl Identity {
     pub fn from_config(key: x25519::PrivateKey, peer_id: PeerId) -> Self {
-        let keypair = KeyPair::load(key);
-        Identity::FromConfig(IdentityFromConfig { keypair, peer_id })
+        let key = ConfigKey::new(key);
+        Identity::FromConfig(IdentityFromConfig { key, peer_id })
     }
 
     pub fn from_storage(key_name: String, peer_id_name: String, backend: SecureBackend) -> Self {
         Identity::FromStorage(IdentityFromStorage {
+            backend,
             key_name,
             peer_id_name,
-            backend,
         })
-    }
-
-    pub fn peer_id_from_config(&self) -> Option<PeerId> {
-        match self {
-            Identity::FromConfig(config) => Some(config.peer_id),
-            _ => None,
-        }
-    }
-
-    pub fn public_key_from_config(&self) -> Option<x25519::PublicKey> {
-        if let Identity::FromConfig(config) = self {
-            Some(config.keypair.public_key())
-        } else {
-            None
-        }
     }
 }
 
 /// The identity is stored within the config.
-#[cfg_attr(any(test, feature = "fuzzing"), derive(Clone, PartialEq))]
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct IdentityFromConfig {
-    #[serde(rename = "key")]
-    pub keypair: KeyPair<x25519::PrivateKey>,
+    #[serde(flatten)]
+    pub key: ConfigKey<x25519::PrivateKey>,
     pub peer_id: PeerId,
 }
 
 /// This represents an identity in a secure-storage as defined in NodeConfig::secure.
-#[cfg_attr(any(test, feature = "fuzzing"), derive(Clone, PartialEq))]
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct IdentityFromStorage {
+    pub backend: SecureBackend,
     pub key_name: String,
     pub peer_id_name: String,
-    pub backend: SecureBackend,
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::config::RoleType;
-    use libra_temppath::TempPath;
-    use rand::{rngs::StdRng, SeedableRng};
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RateLimitConfig {
+    /// Maximum number of bytes/s for an IP
+    pub ip_byte_bucket_rate: usize,
+    /// Maximum burst of bytes for an IP
+    pub ip_byte_bucket_size: usize,
+    /// Initial amount of tokens initially in the bucket
+    pub initial_bucket_fill_percentage: u8,
+    /// Allow for disabling the throttles
+    pub enabled: bool,
+}
 
-    #[test]
-    fn test_with_defaults() {
-        // Assert default exists
-        let (mut config, path) = generate_config();
-        assert_eq!(config.network_peers, NetworkPeersConfig::default());
-        assert_eq!(config.network_peers_file, PathBuf::new());
-        assert_ne!(config.identity, Identity::None);
-        assert_eq!(config.seed_peers, SeedPeersConfig::default());
-        assert_eq!(config.seed_peers_file, PathBuf::new());
-        let identity = config.identity.clone();
-
-        // Assert default loading doesn't affect paths and defaults remain in place
-        let root_dir = RootPath::new_path(path.path());
-        config.load(&root_dir, RoleType::FullNode).unwrap();
-        assert_eq!(config.network_peers, NetworkPeersConfig::default());
-        assert_eq!(config.network_peers_file, PathBuf::new());
-        assert_eq!(config.identity, identity);
-        assert_eq!(config.seed_peers_file, PathBuf::new());
-        assert_eq!(config.seed_peers, SeedPeersConfig::default());
-
-        // Assert saving updates paths
-        config.save(&root_dir).unwrap();
-        assert_eq!(config.seed_peers, SeedPeersConfig::default());
-        assert_eq!(
-            config.seed_peers_file,
-            PathBuf::from(config.default_path(SEED_PEERS_DEFAULT))
-        );
-
-        // Assert paths and values are not set (i.e., no defaults apply)
-        assert_eq!(config.identity, identity);
-        assert_eq!(config.network_peers, NetworkPeersConfig::default());
-        assert_eq!(config.network_peers_file, PathBuf::new());
-    }
-
-    #[test]
-    fn test_with_random() {
-        let (mut config, path) = generate_config();
-        config.network_peers = NetworkPeersConfig::default();
-        let mut rng = StdRng::from_seed([5u8; 32]);
-        config.random(&mut rng);
-        // This is default (empty) otherwise
-        let peer_id = config.identity.peer_id_from_config().unwrap();
-        config.seed_peers.seed_peers.insert(peer_id, vec![]);
-
-        let identity = config.identity.clone();
-        let peers = config.network_peers.clone();
-        let seed_peers = config.seed_peers.clone();
-
-        // Assert empty paths
-        assert_eq!(config.network_peers_file, PathBuf::new());
-        assert_eq!(config.seed_peers_file, PathBuf::new());
-
-        // Assert saving updates paths
-        let root_dir = RootPath::new_path(path.path());
-        config.save(&root_dir).unwrap();
-        assert_eq!(config.identity, identity);
-        assert_eq!(config.network_peers, peers);
-        assert_eq!(config.network_peers_file, PathBuf::new());
-        assert_eq!(config.seed_peers, seed_peers);
-        assert_eq!(
-            config.seed_peers_file,
-            PathBuf::from(config.default_path(SEED_PEERS_DEFAULT))
-        );
-
-        // Assert a fresh load correctly populates the config
-        let mut new_config = NetworkConfig::default();
-        // First that paths are empty
-        assert_eq!(new_config.network_peers_file, PathBuf::new());
-        assert_eq!(new_config.seed_peers_file, PathBuf::new());
-        // Loading populates things correctly
-        let result = new_config.load(&root_dir, RoleType::Validator);
-        result.unwrap();
-        assert_eq!(config.identity, identity);
-        assert_eq!(config.network_peers, peers);
-        assert_eq!(config.network_peers_file, PathBuf::new(),);
-        assert_eq!(config.seed_peers, seed_peers);
-        assert_eq!(
-            config.seed_peers_file,
-            PathBuf::from(config.default_path(SEED_PEERS_DEFAULT))
-        );
-        assert_eq!(new_config.network_id, config.network_id)
-    }
-
-    #[test]
-    fn test_generate_ip_addresses_on_load() {
-        // Generate a random node
-        let (mut config, path) = generate_config();
-        let mut rng = StdRng::from_seed([32u8; 32]);
-        config.random(&mut rng);
-        let root_dir = RootPath::new_path(path.path());
-
-        // Now reset IP addresses and save
-        config.listen_address = NetworkAddress::mock();
-        config.save(&root_dir).unwrap();
-
-        // Now load and verify default IP addresses are generated
-        config.load(&root_dir, RoleType::FullNode).unwrap();
-        assert_ne!(config.listen_address.to_string(), "");
-    }
-
-    fn generate_config() -> (NetworkConfig, TempPath) {
-        let temp_dir = TempPath::new();
-        temp_dir.create_as_dir().expect("error creating tempdir");
-        let config = NetworkConfig::default();
-        (config, temp_dir)
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            ip_byte_bucket_rate: INBOUND_IP_BYTE_BUCKET_RATE,
+            ip_byte_bucket_size: INBOUND_IP_BYTE_BUCKET_SIZE,
+            initial_bucket_fill_percentage: 25,
+            enabled: true,
+        }
     }
 }

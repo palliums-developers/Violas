@@ -1,20 +1,12 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-#![forbid(unsafe_code)]
-
-use crate::json_log::JsonLogEntry;
 use anyhow::Result;
+use diem_logger::json_log::JsonLogEntry;
 use reqwest::blocking;
 use std::collections::HashMap;
 
-pub mod json_log;
-pub mod libra_trace;
 pub mod node_debug_service;
-
-pub mod prelude {
-    pub use crate::{end_trace, event, trace_code_block, trace_edge, trace_event};
-}
 
 /// Implement default utility client for NodeDebugInterface
 pub struct NodeDebugClient {

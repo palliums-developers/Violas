@@ -1,19 +1,21 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Interface between StateSynchronizer and Network layers.
 
 use crate::{chunk_request::GetChunkRequest, chunk_response::GetChunkResponse, counters};
 use channel::message_queues::QueueStyle;
-use libra_types::PeerId;
+use diem_metrics::IntCounterVec;
+use diem_types::PeerId;
 use network::{
     error::NetworkError,
     peer_manager::{ConnectionRequestSender, PeerManagerRequestSender},
-    protocols::network::{NetworkEvents, NetworkSender},
-    validator_network::network_builder::NetworkBuilder,
+    protocols::network::{NetworkEvents, NetworkSender, NewNetworkSender},
     ProtocolId,
 };
 use serde::{Deserialize, Serialize};
+
+const STATE_SYNC_MAX_BUFFER_SIZE: usize = 1;
 
 /// StateSynchronizer network messages
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -43,25 +45,8 @@ pub struct StateSynchronizerSender {
     inner: NetworkSender<StateSynchronizerMsg>,
 }
 
-pub fn add_to_network(
-    network: &mut NetworkBuilder,
-) -> (StateSynchronizerSender, StateSynchronizerEvents) {
-    let (sender, receiver, connection_reqs_tx, connection_notifs_rx) = network
-        .add_protocol_handler(
-            vec![],
-            vec![ProtocolId::StateSynchronizerDirectSend],
-            QueueStyle::LIFO,
-            1,
-            Some(&counters::PENDING_STATE_SYNCHRONIZER_NETWORK_EVENTS),
-        );
-    (
-        StateSynchronizerSender::new(sender, connection_reqs_tx),
-        StateSynchronizerEvents::new(receiver, connection_notifs_rx),
-    )
-}
-
-impl StateSynchronizerSender {
-    pub fn new(
+impl NewNetworkSender for StateSynchronizerSender {
+    fn new(
         peer_mgr_reqs_tx: PeerManagerRequestSender,
         connection_reqs_tx: ConnectionRequestSender,
     ) -> Self {
@@ -69,7 +54,9 @@ impl StateSynchronizerSender {
             inner: NetworkSender::new(peer_mgr_reqs_tx, connection_reqs_tx),
         }
     }
+}
 
+impl StateSynchronizerSender {
     pub fn send_to(
         &mut self,
         recipient: PeerId,
@@ -78,4 +65,21 @@ impl StateSynchronizerSender {
         let protocol = ProtocolId::StateSynchronizerDirectSend;
         self.inner.send_to(recipient, protocol, message)
     }
+}
+
+/// Configuration for the network endpoints to support StateSynchronizer.
+pub fn network_endpoint_config() -> (
+    Vec<ProtocolId>,
+    Vec<ProtocolId>,
+    QueueStyle,
+    usize,
+    Option<&'static IntCounterVec>,
+) {
+    (
+        vec![],
+        vec![ProtocolId::StateSynchronizerDirectSend],
+        QueueStyle::LIFO,
+        STATE_SYNC_MAX_BUFFER_SIZE,
+        Some(&counters::PENDING_STATE_SYNCHRONIZER_NETWORK_EVENTS),
+    )
 }

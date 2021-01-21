@@ -1,43 +1,43 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Interface between Mempool and Network layers.
 
 use crate::counters;
 use channel::message_queues::QueueStyle;
-use libra_types::{transaction::SignedTransaction, PeerId};
+use diem_metrics::IntCounterVec;
+use diem_types::{transaction::SignedTransaction, PeerId};
+use fail::fail_point;
 use network::{
     error::NetworkError,
     peer_manager::{ConnectionRequestSender, PeerManagerRequestSender},
-    protocols::network::{NetworkEvents, NetworkSender},
-    validator_network::network_builder::NetworkBuilder,
+    protocols::network::{NetworkEvents, NetworkSender, NewNetworkSender},
     ProtocolId,
 };
 use serde::{Deserialize, Serialize};
 
-/// Container for exchanging transactions with other Mempools
+/// Container for exchanging transactions with other Mempools.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum MempoolSyncMsg {
-    /// broadcast request issued by the sender
+    /// Broadcast request issued by the sender.
     BroadcastTransactionsRequest {
-        /// unique id of sync request. Can be used by sender for rebroadcast analysis
-        request_id: String,
-        /// shared transactions in this batch
+        /// Unique id of sync request. Can be used by sender for rebroadcast analysis
+        request_id: Vec<u8>,
         transactions: Vec<SignedTransaction>,
     },
-    /// broadcast ack issued by the receiver
+    /// Broadcast ack issued by the receiver.
     BroadcastTransactionsResponse {
-        /// unique id of received broadcast request
-        request_id: String,
-        /// indices of transactions that failed that may succeed on resend
-        retry_txns: Vec<u64>,
-        /// backpressure signal from recipient when it is overwhelmed (e.g. mempool is full)
+        request_id: Vec<u8>,
+        /// Retry signal from recipient if there are txns in corresponding broadcast
+        /// that were rejected from mempool but may succeed on resend.
+        retry: bool,
+        /// A backpressure signal from the recipient when it is overwhelmed (e.g., mempool is full).
         backoff: bool,
     },
 }
 
-/// Protocol id for mempool direct-send calls
-pub const MEMPOOL_DIRECT_SEND_PROTOCOL: &[u8] = b"/libra/direct-send/0.1.0/mempool/0.1.0";
+/// Protocol id for mempool direct-send calls.
+pub const MEMPOOL_DIRECT_SEND_PROTOCOL: &[u8] = b"/diem/direct-send/0.1.0/mempool/0.1.0";
 
 /// The interface from Network to Mempool layer.
 ///
@@ -61,28 +61,27 @@ pub struct MempoolNetworkSender {
 }
 
 /// Create a new Sender that only sends for the `MEMPOOL_DIRECT_SEND_PROTOCOL` ProtocolId and a
-/// Receiver (Events) that explicitly returns only said ProtocolId.
-pub fn add_to_network(
-    network: &mut NetworkBuilder,
+/// Receiver (Events) that explicitly returns only said ProtocolId..
+pub fn network_endpoint_config(
     max_broadcasts_per_peer: usize,
-) -> (MempoolNetworkSender, MempoolNetworkEvents) {
-    let (sender, receiver, connection_reqs_tx, connection_notifs_rx) = network
-        .add_protocol_handler(
-            vec![],
-            vec![ProtocolId::MempoolDirectSend],
-            QueueStyle::KLAST,
-            max_broadcasts_per_peer,
-            Some(&counters::PENDING_MEMPOOL_NETWORK_EVENTS),
-        );
+) -> (
+    Vec<ProtocolId>,
+    Vec<ProtocolId>,
+    QueueStyle,
+    usize,
+    Option<&'static IntCounterVec>,
+) {
     (
-        MempoolNetworkSender::new(sender, connection_reqs_tx),
-        MempoolNetworkEvents::new(receiver, connection_notifs_rx),
+        vec![],
+        vec![ProtocolId::MempoolDirectSend],
+        QueueStyle::KLAST,
+        max_broadcasts_per_peer,
+        Some(&counters::PENDING_MEMPOOL_NETWORK_EVENTS),
     )
 }
 
-impl MempoolNetworkSender {
-    /// Returns a Sender that only sends for the `MEMPOOL_DIRECT_SEND_PROTOCOL` ProtocolId.
-    pub fn new(
+impl NewNetworkSender for MempoolNetworkSender {
+    fn new(
         peer_mgr_reqs_tx: PeerManagerRequestSender,
         connection_reqs_tx: ConnectionRequestSender,
     ) -> Self {
@@ -90,14 +89,17 @@ impl MempoolNetworkSender {
             inner: NetworkSender::new(peer_mgr_reqs_tx, connection_reqs_tx),
         }
     }
+}
 
-    /// Send a single message to the destination peer using the `MEMPOOL_DIRECT_SEND_PROTOCOL`
-    /// ProtocolId.
+impl MempoolNetworkSender {
     pub fn send_to(
         &mut self,
         recipient: PeerId,
         message: MempoolSyncMsg,
     ) -> Result<(), NetworkError> {
+        fail_point!("mempool::send_to", |_| {
+            Err(anyhow::anyhow!("Injected error in mempool::send_to").into())
+        });
         let protocol = ProtocolId::MempoolDirectSend;
         self.inner.send_to(recipient, protocol, message)
     }

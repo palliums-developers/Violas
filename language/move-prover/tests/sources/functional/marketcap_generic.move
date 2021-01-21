@@ -1,5 +1,5 @@
 // A minimized version of the MarketCap verification problem.
-address 0x0 {
+address 0x1 {
 
 module TestMarketCapGeneric {
 
@@ -23,7 +23,7 @@ module TestMarketCapGeneric {
         }
     }
 
-    // A resource representing the Libra coin
+    // A resource representing the Diem coin
     resource struct T<X> {
         // The value of the coin. May be zero
         value: u64,
@@ -35,7 +35,7 @@ module TestMarketCapGeneric {
     }
 
     resource struct MarketCap<X> {
-        // The sum of the values of all LibraCoin::T resources in the system
+        // The sum of the values of all DiemCoin::T resources in the system
         total_value: u128,
     }
 

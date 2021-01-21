@@ -1,10 +1,12 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use libra_crypto::{
+use crate::encrypted::{EncNetworkAddress, Key, KeyVersion};
+use diem_crypto::{
     traits::{CryptoMaterialError, ValidCryptoMaterialStringExt},
     x25519,
 };
+use move_core_types::account_address::AccountAddress;
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest::{collection::vec, prelude::*};
 #[cfg(any(test, feature = "fuzzing"))]
@@ -14,42 +16,22 @@ use std::{
     convert::{Into, TryFrom},
     fmt,
     iter::IntoIterator,
-    net::{self, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{self, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     num,
     str::FromStr,
     string::ToString,
 };
 use thiserror::Error;
 
+pub mod encrypted;
+
 const MAX_DNS_NAME_SIZE: usize = 255;
 
-/// A `RawNetworkAddress` is the serialized, unverified, on-chain representation
-/// of a [`NetworkAddress`]. Specifically, a `RawNetworkAddress` is usually an
-/// [`lcs`]-serialized `NetworkAddress`.
+/// ## Overview
 ///
-/// This representation is useful because:
-///
-/// 1. Move does't understand (and doesn't really need to understand) what a
-///    `NetworkAddress` is, so we can just store an opaque `vector<u8>` on-chain,
-///    which we represent as `RawNetworkAddress` in Rust.
-/// 2. We want to deserialize a `Vec<NetworkAddress>` but ignore ones that don't
-///    properly deserialize. For example, a validator might advertise several
-///    `NetworkAddress`. If that validator is running a newer version of the node
-///    software, and old versions can't understand one of the `NetworkAddress`,
-///    they would be able to ignore the one that doesn't deserialize for them.
-///    We can easily do this by storing a `vector<vector<u8>>` on-chain, which
-///    we deserialize as `Vec<RawNetworkAddress>` in Rust. Then we deserialize
-///    each `RawNetworkAddress` into a `NetworkAddress` individually.
-///
-/// Note: deserializing a `RawNetworkAddress` does no validation, other than
-/// deserializing the underlying `Vec<u8>`.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct RawNetworkAddress(#[serde(with = "serde_bytes")] Vec<u8>);
-
-/// Libra `NetworkAddress` is a compact, efficient, self-describing and
+/// Diem `NetworkAddress` is a compact, efficient, self-describing and
 /// future-proof network address represented as a stack of protocols. Essentially
-/// libp2p's [multiaddr](https://multiformats.io/multiaddr/) but using [`lcs`] to
-/// describe the binary format.
+/// libp2p's [multiaddr] but using [`bcs`] to describe the binary format.
 ///
 /// Most validators will advertise a network address like:
 ///
@@ -62,7 +44,9 @@ pub struct RawNetworkAddress(#[serde(with = "serde_bytes")] Vec<u8>);
 /// 3. Perform a Noise IK handshake and assume the peer's static pubkey is
 ///    `<x25519-pubkey>`. After this step, we will have a secure, authenticated
 ///    connection with the peer.
-/// 4. Perform a LibraNet version negotiation handshake (version 1).
+/// 4. Perform a DiemNet version negotiation handshake (version 1).
+///
+/// ## Self-describing, Upgradable
 ///
 /// One key concept behind `NetworkAddress` is that it is fully self-describing,
 /// which allows us to easily "pre-negotiate" protocols while also allowing for
@@ -74,13 +58,23 @@ pub struct RawNetworkAddress(#[serde(with = "serde_bytes")] Vec<u8>);
 /// transport protocol to use; in this sense, the secure transport protocol is
 /// "pre-negotiated" by the dialier selecting which advertised protocol to use.
 ///
-/// In addition, `NetworkAddress` is integrated with the LibraNet concept of a
+/// Each network address is encoded with the length of the encoded `NetworkAddress`
+/// and then the serialized protocol slices to allow for transparent upgradeability.
+/// For example, if the current software cannot decode a `NetworkAddress` within
+/// a `Vec<NetworkAddress>` it can still decode the underlying `Vec<u8>` and
+/// retrieve the remaining `Vec<NetworkAddress>`.
+///
+/// ## Transport
+///
+/// In addition, `NetworkAddress` is integrated with the DiemNet concept of a
 /// [`Transport`], which takes a `NetworkAddress` when dialing and peels off
-/// [`Protocols`] to establish a connection and perform initial handshakes.
-/// Similarly, the `Transport` takes `NetworkAddress` to listen on, which tells
+/// [`Protocol`]s to establish a connection and perform initial handshakes.
+/// Similarly, the [`Transport`] takes `NetworkAddress` to listen on, which tells
 /// it what protocols to expect on the socket.
 ///
-/// An example of a serialized `NetworkAddress` and `RawNetworkAddress`:
+/// ## Example
+///
+/// An example of a serialized `NetworkAddress`:
 ///
 /// ```rust
 /// // human-readable format:
@@ -89,36 +83,29 @@ pub struct RawNetworkAddress(#[serde(with = "serde_bytes")] Vec<u8>);
 /// //
 /// // serialized NetworkAddress:
 /// //
-/// //      [ 02 00 0a 00 00 10 05 80 00 ]
-/// //        \  \  \           \  \
-/// //         \  \  \           \  '-- u16 tcp port
-/// //          \  \  \           '-- uvarint protocol id for /tcp
-/// //           \  \  '-- u32 ipv4 address
-/// //            \  '-- uvarint protocol id for /ip4
-/// //             '-- uvarint number of protocols
-/// //
-/// // serialized RawNetworkAddress:
-/// //
-/// //   [ 09 02 00 0a 00 00 10 05 80 00 ]
-/// //     \  \
-/// //      \  '-- serialized NetworkAddress
-/// //       '-- uvarint length prefix
+/// //      [ 09 02 00 0a 00 00 10 05 80 00 ]
+/// //          \  \  \  \           \  \
+/// //           \  \  \  \           \  '-- u16 tcp port
+/// //            \  \  \  \           '-- uvarint protocol id for /tcp
+/// //             \  \  \  '-- u32 ipv4 address
+/// //              \  \  '-- uvarint protocol id for /ip4
+/// //               \  '-- uvarint number of protocols
+/// //                '-- length of encoded network address
 ///
-/// use libra_network_address::{NetworkAddress, RawNetworkAddress};
-/// use lcs;
+/// use diem_network_address::NetworkAddress;
+/// use bcs;
 /// use std::{str::FromStr, convert::TryFrom};
 ///
 /// let addr = NetworkAddress::from_str("/ip4/10.0.0.16/tcp/80").unwrap();
-/// let raw_addr = RawNetworkAddress::try_from(&addr).unwrap();
-/// let actual_ser_raw_addr = lcs::to_bytes(&raw_addr).unwrap();
-/// let actual_raw_addr: Vec<u8> = raw_addr.into();
+/// let actual_ser_addr = bcs::to_bytes(&addr).unwrap();
 ///
-/// let expected_raw_addr: Vec<u8> = [2, 0, 10, 0, 0, 16, 5, 80, 0].to_vec();
-/// let expected_ser_raw_addr: Vec<u8> = [9, 2, 0, 10, 0, 0, 16, 5, 80, 0].to_vec();
+/// let expected_ser_addr: Vec<u8> = [9, 2, 0, 10, 0, 0, 16, 5, 80, 0].to_vec();
 ///
-/// assert_eq!(expected_raw_addr, actual_raw_addr);
-/// assert_eq!(expected_ser_raw_addr, actual_ser_raw_addr);
+/// assert_eq!(expected_ser_addr, actual_ser_addr);
 /// ```
+///
+/// [multiaddr]: https://multiformats.io/multiaddr/
+/// [`Transport`]: ../netcore/transport/trait.Transport.html
 #[derive(Clone, Eq, PartialEq)]
 pub struct NetworkAddress(Vec<Protocol>);
 
@@ -157,7 +144,7 @@ pub enum Protocol {
 ///
 /// So the restrictions we're adding are (1) no '/' characters and (2) the name
 /// is a valid unicode string. We do this because '/' characters are already our
-/// protocol delimiter and Rust's [`::std::net::ToSocketAddr`] API requires a
+/// protocol delimiter and Rust's [`std::net::ToSocketAddrs`] API requires a
 /// `&str`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DnsName(String);
@@ -194,62 +181,17 @@ pub enum ParseError {
 
     #[error("dns name is too long: len: {0} bytes, max len: 255 bytes")]
     DnsNameTooLong(usize),
+
+    #[error("error decrypting network address")]
+    DecryptError,
+
+    #[error("bcs error: {0}")]
+    BCSError(#[from] bcs::Error),
 }
 
 #[derive(Error, Debug)]
 #[error("network address cannot be empty")]
 pub struct EmptyError;
-
-///////////////////////
-// RawNetworkAddress //
-///////////////////////
-
-impl RawNetworkAddress {
-    pub fn new(bytes: Vec<u8>) -> Self {
-        Self(bytes)
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl Into<Vec<u8>> for RawNetworkAddress {
-    fn into(self) -> Vec<u8> {
-        self.0
-    }
-}
-
-impl AsRef<[u8]> for RawNetworkAddress {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
-    }
-}
-
-impl TryFrom<&NetworkAddress> for RawNetworkAddress {
-    type Error = lcs::Error;
-
-    fn try_from(value: &NetworkAddress) -> Result<Self, lcs::Error> {
-        let bytes = lcs::to_bytes(value)?;
-        Ok(RawNetworkAddress::new(bytes))
-    }
-}
-
-#[cfg(any(test, feature = "fuzzing"))]
-impl Arbitrary for RawNetworkAddress {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        any::<NetworkAddress>()
-            .prop_map(|addr| RawNetworkAddress::try_from(&addr).unwrap())
-            .boxed()
-    }
-}
 
 ////////////////////
 // NetworkAddress //
@@ -258,15 +200,6 @@ impl Arbitrary for RawNetworkAddress {
 impl NetworkAddress {
     fn new(protocols: Vec<Protocol>) -> Self {
         Self(protocols)
-    }
-
-    // TODO(philiphayes): could return NonZeroUsize?
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 
     pub fn as_slice(&self) -> &[Protocol] {
@@ -283,14 +216,33 @@ impl NetworkAddress {
         self
     }
 
+    /// See [`EncNetworkAddress::encrypt`].
+    pub fn encrypt(
+        self,
+        shared_val_netaddr_key: &Key,
+        key_version: KeyVersion,
+        account: &AccountAddress,
+        seq_num: u64,
+        addr_idx: u32,
+    ) -> Result<EncNetworkAddress, ParseError> {
+        EncNetworkAddress::encrypt(
+            self,
+            shared_val_netaddr_key,
+            key_version,
+            account,
+            seq_num,
+            addr_idx,
+        )
+    }
+
     /// Given a base `NetworkAddress`, append production protocols and
     /// return the modified `NetworkAddress`.
     ///
     /// ### Example
     ///
     /// ```rust
-    /// use libra_crypto::{traits::ValidCryptoMaterialStringExt, x25519};
-    /// use libra_network_address::NetworkAddress;
+    /// use diem_crypto::{traits::ValidCryptoMaterialStringExt, x25519};
+    /// use diem_network_address::NetworkAddress;
     /// use std::str::FromStr;
     ///
     /// let pubkey_str = "080e287879c918794170e258bfaddd75acac5b3e350419044655e4983a487120";
@@ -312,10 +264,10 @@ impl NetworkAddress {
             .push(Protocol::Handshake(handshake_version))
     }
 
-    /// Check that a `NetworkAddress` looks like a typical LibraNet address with
+    /// Check that a `NetworkAddress` looks like a typical DiemNet address with
     /// associated protocols.
     ///
-    /// "typical" LibraNet addresses begin with a transport protocol:
+    /// "typical" DiemNet addresses begin with a transport protocol:
     ///
     /// `"/ip4/<addr>/tcp/<port>"` or
     /// `"/ip6/<addr>/tcp/<port>"` or
@@ -331,15 +283,24 @@ impl NetworkAddress {
     /// ### Example
     ///
     /// ```rust
-    /// use libra_network_address::NetworkAddress;
+    /// use diem_network_address::NetworkAddress;
     /// use std::str::FromStr;
     ///
     /// let addr_str = "/ip4/1.2.3.4/tcp/6180/ln-noise-ik/080e287879c918794170e258bfaddd75acac5b3e350419044655e4983a487120/ln-handshake/0";
     /// let addr = NetworkAddress::from_str(addr_str).unwrap();
-    /// assert!(addr.is_libranet_addr());
+    /// assert!(addr.is_diemnet_addr());
     /// ```
-    pub fn is_libranet_addr(&self) -> bool {
-        parse_libranet_protos(self.as_slice()).is_some()
+    pub fn is_diemnet_addr(&self) -> bool {
+        parse_diemnet_protos(self.as_slice()).is_some()
+    }
+
+    /// Retrieves the IP address from the network address
+    pub fn find_ip_addr(&self) -> Option<IpAddr> {
+        self.0.iter().find_map(|proto| match proto {
+            Protocol::Ip4(addr) => Some(IpAddr::V4(*addr)),
+            Protocol::Ip6(addr) => Some(IpAddr::V6(*addr)),
+            _ => None,
+        })
     }
 
     /// A temporary, hacky function to parse out the first `/ln-noise-ik/<pubkey>` from
@@ -350,6 +311,22 @@ impl NetworkAddress {
             Protocol::NoiseIK(pubkey) => Some(*pubkey),
             _ => None,
         })
+    }
+
+    /// A function to rotate public keys for `NoiseIK` protocols
+    pub fn rotate_noise_public_key(
+        &mut self,
+        to_replace: &x25519::PublicKey,
+        new_public_key: &x25519::PublicKey,
+    ) {
+        for protocol in self.0.iter_mut() {
+            // Replace the public key in any Noise protocols that match the key
+            if let Protocol::NoiseIK(public_key) = protocol {
+                if public_key == to_replace {
+                    *protocol = Protocol::NoiseIK(*new_public_key);
+                }
+            }
+        }
     }
 
     #[cfg(any(test, feature = "fuzzing"))]
@@ -392,6 +369,24 @@ impl FromStr for NetworkAddress {
     }
 }
 
+impl ToSocketAddrs for NetworkAddress {
+    type Iter = std::vec::IntoIter<SocketAddr>;
+
+    fn to_socket_addrs(&self) -> Result<Self::Iter, std::io::Error> {
+        if let Some(((ipaddr, port), _)) = parse_ip_tcp(self.as_slice()) {
+            Ok(vec![SocketAddr::new(ipaddr, port)].into_iter())
+        } else if let Some(((ip_filter, dns_name, port), _)) = parse_dns_tcp(self.as_slice()) {
+            format!("{}:{}", dns_name, port).to_socket_addrs().map(|v| {
+                v.filter(|addr| ip_filter.matches(addr.ip()))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+            })
+        } else {
+            Ok(vec![].into_iter())
+        }
+    }
+}
+
 impl TryFrom<Vec<Protocol>> for NetworkAddress {
     type Error = EmptyError;
 
@@ -407,15 +402,6 @@ impl TryFrom<Vec<Protocol>> for NetworkAddress {
 impl From<Protocol> for NetworkAddress {
     fn from(proto: Protocol) -> NetworkAddress {
         NetworkAddress::new(vec![proto])
-    }
-}
-
-impl TryFrom<&RawNetworkAddress> for NetworkAddress {
-    type Error = lcs::Error;
-
-    fn try_from(value: &RawNetworkAddress) -> Result<Self, lcs::Error> {
-        let addr: NetworkAddress = lcs::from_bytes(value.as_ref())?;
-        Ok(addr)
     }
 }
 
@@ -447,15 +433,16 @@ impl Serialize for NetworkAddress {
     where
         S: Serializer,
     {
-        #[derive(Serialize)]
-        #[serde(rename = "NetworkAddress")]
-        struct SerializeWrapper<'a>(&'a [Protocol]);
-
         if serializer.is_human_readable() {
             serializer.serialize_str(&self.to_string())
         } else {
-            let val = SerializeWrapper(&self.0.as_ref());
-            val.serialize(serializer)
+            #[derive(Serialize)]
+            #[serde(rename = "NetworkAddress")]
+            struct Wrapper<'a>(#[serde(with = "serde_bytes")] &'a [u8]);
+
+            bcs::to_bytes(&self.as_slice())
+                .map_err(serde::ser::Error::custom)
+                .and_then(|v| Wrapper(&v).serialize(serializer))
         }
     }
 }
@@ -465,17 +452,17 @@ impl<'de> Deserialize<'de> for NetworkAddress {
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(rename = "NetworkAddress")]
-        struct DeserializeWrapper(Vec<Protocol>);
-
         if deserializer.is_human_readable() {
             let s = <String>::deserialize(deserializer)?;
             NetworkAddress::from_str(s.as_str()).map_err(de::Error::custom)
         } else {
-            let wrapper = DeserializeWrapper::deserialize(deserializer)?;
-            let addr = NetworkAddress::try_from(wrapper.0).map_err(de::Error::custom)?;
-            Ok(addr)
+            #[derive(Deserialize)]
+            #[serde(rename = "NetworkAddress")]
+            struct Wrapper(#[serde(with = "serde_bytes")] Vec<u8>);
+
+            Wrapper::deserialize(deserializer)
+                .and_then(|v| bcs::from_bytes(&v.0).map_err(de::Error::custom))
+                .and_then(|v: Vec<Protocol>| NetworkAddress::try_from(v).map_err(de::Error::custom))
         }
     }
 }
@@ -493,7 +480,7 @@ impl Arbitrary for NetworkAddress {
 }
 
 #[cfg(any(test, feature = "fuzzing"))]
-pub fn arb_libranet_addr() -> impl Strategy<Value = NetworkAddress> {
+pub fn arb_diemnet_addr() -> impl Strategy<Value = NetworkAddress> {
     let arb_transport_protos = prop_oneof![
         any::<u16>().prop_map(|port| vec![Protocol::Memory(port)]),
         any::<(Ipv4Addr, u16)>()
@@ -507,12 +494,12 @@ pub fn arb_libranet_addr() -> impl Strategy<Value = NetworkAddress> {
         any::<(DnsName, u16)>()
             .prop_map(|(name, port)| vec![Protocol::Dns6(name), Protocol::Tcp(port)]),
     ];
-    let arb_libranet_protos = any::<(x25519::PublicKey, u8)>()
+    let arb_diemnet_protos = any::<(x25519::PublicKey, u8)>()
         .prop_map(|(pubkey, hs)| vec![Protocol::NoiseIK(pubkey), Protocol::Handshake(hs)]);
 
-    (arb_transport_protos, arb_libranet_protos).prop_map(
-        |(mut transport_protos, mut libranet_protos)| {
-            transport_protos.append(&mut libranet_protos);
+    (arb_transport_protos, arb_diemnet_protos).prop_map(
+        |(mut transport_protos, mut diemnet_protos)| {
+            transport_protos.append(&mut diemnet_protos);
             NetworkAddress::new(transport_protos)
         },
     )
@@ -745,6 +732,24 @@ pub fn parse_dns_tcp(protos: &[Protocol]) -> Option<((IpFilter, &DnsName, u16), 
     }
 }
 
+pub fn parse_tcp(protos: &[Protocol]) -> Option<((String, u16), &[Protocol])> {
+    use Protocol::*;
+
+    if protos.len() < 2 {
+        return None;
+    }
+
+    let (prefix, suffix) = protos.split_at(2);
+    match prefix {
+        [Ip4(ip), Tcp(port)] => Some(((ip.to_string(), *port), suffix)),
+        [Ip6(ip), Tcp(port)] => Some(((ip.to_string(), *port), suffix)),
+        [Dns(name), Tcp(port)] => Some(((name.to_string(), *port), suffix)),
+        [Dns4(name), Tcp(port)] => Some(((name.to_string(), *port), suffix)),
+        [Dns6(name), Tcp(port)] => Some(((name.to_string(), *port), suffix)),
+        _ => None,
+    }
+}
+
 /// parse the `&[Protocol]` into the `"/ln-noise-ik/<pubkey>"` prefix and
 /// unparsed `&[Protocol]` suffix.
 pub fn parse_noise_ik(protos: &[Protocol]) -> Option<(&x25519::PublicKey, &[Protocol])> {
@@ -763,10 +768,10 @@ pub fn parse_handshake(protos: &[Protocol]) -> Option<(u8, &[Protocol])> {
     }
 }
 
-/// parse canonical libranet protocols
+/// parse canonical diemnet protocols
 ///
-/// See: `NetworkAddress::is_libranet_addr(&self)`
-fn parse_libranet_protos(protos: &[Protocol]) -> Option<&[Protocol]> {
+/// See: [`NetworkAddress::is_diemnet_addr`]
+fn parse_diemnet_protos(protos: &[Protocol]) -> Option<&[Protocol]> {
     // parse base transport layer
     // ---
     // parse_ip_tcp
@@ -811,7 +816,7 @@ fn parse_libranet_protos(protos: &[Protocol]) -> Option<&[Protocol]> {
 mod test {
     use super::*;
     use anyhow::format_err;
-    use lcs::test_helpers::assert_canonical_encode_decode;
+    use bcs::test_helpers::assert_canonical_encode_decode;
 
     #[test]
     fn test_network_address_display() {
@@ -1045,18 +1050,18 @@ mod test {
         }
 
         #[test]
-        fn test_is_libranet_addr(addr in arb_libranet_addr()) {
-            assert!(addr.is_libranet_addr(), "addr.is_libranet_addr() = false; addr: '{}'", addr);
+        fn test_is_diemnet_addr(addr in arb_diemnet_addr()) {
+            assert!(addr.is_diemnet_addr(), "addr.is_diemnet_addr() = false; addr: '{}'", addr);
         }
 
         #[test]
-        fn test_is_not_libranet_addr_with_trailing(
-            addr in arb_libranet_addr(),
+        fn test_is_not_diemnet_addr_with_trailing(
+            addr in arb_diemnet_addr(),
             addr_suffix in any::<NetworkAddress>(),
         ) {
-            // A valid LibraNet addr w/ unexpected trailing protocols should not parse.
+            // A valid DiemNet addr w/ unexpected trailing protocols should not parse.
             let addr = addr.extend_from_slice(addr_suffix.as_slice());
-            assert!(!addr.is_libranet_addr(), "addr.is_libranet_addr() = true; addr: '{}'", addr);
+            assert!(!addr.is_diemnet_addr(), "addr.is_diemnet_addr() = true; addr: '{}'", addr);
         }
     }
 }

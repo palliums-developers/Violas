@@ -1,16 +1,26 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::config::NodeConfig;
-use get_if_addrs::get_if_addrs;
-use libra_network_address::{NetworkAddress, Protocol};
-use libra_types::{transaction::Transaction, PeerId};
-use serde::{Serialize, Serializer};
-use std::{
-    collections::{BTreeMap, HashMap},
-    hash::BuildHasher,
-    net::{TcpListener, TcpStream},
+use diem_network_address::{NetworkAddress, Protocol};
+use diem_types::{
+    account_address::AccountAddress,
+    transaction::{authenticator::AuthenticationKey, Transaction},
 };
+use get_if_addrs::get_if_addrs;
+use std::net::{TcpListener, TcpStream};
+
+pub fn default_validator_owner_auth_key_from_name(name: &[u8]) -> AuthenticationKey {
+    let salt = "validator_owner::";
+    let mut name_in_bytes = salt.as_bytes().to_vec();
+    name_in_bytes.extend_from_slice(name);
+    let hash = diem_crypto::HashValue::sha3_256_of(&name_in_bytes);
+    AuthenticationKey::new(*hash.as_ref())
+}
+
+pub fn validator_owner_account_from_name(name: &[u8]) -> AccountAddress {
+    default_validator_owner_auth_key_from_name(name).derived_address()
+}
 
 /// Return an ephemeral, available port. On unix systems, the port returned will be in the
 /// TIME_WAIT state ensuring that the OS won't hand out this port for some grace period.
@@ -45,7 +55,7 @@ fn get_ephemeral_port() -> ::std::io::Result<u16> {
 pub fn get_local_ip() -> Option<NetworkAddress> {
     get_if_addrs().ok().and_then(|if_addrs| {
         if_addrs
-            .into_iter()
+            .iter()
             .find(|if_addr| !if_addr.is_loopback())
             .map(|if_addr| NetworkAddress::from(Protocol::from(if_addr.ip())))
     })
@@ -60,24 +70,6 @@ pub fn get_available_port_in_multiaddr(is_ipv4: bool) -> NetworkAddress {
     NetworkAddress::from(ip_proto).push(Protocol::Tcp(get_available_port()))
 }
 
-/// Serialize HashMaps as BTreeMaps for consistent ordering
-pub fn serialize_ordered_map<S, V, H>(
-    value: &HashMap<PeerId, V, H>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-    H: BuildHasher,
-    V: Serialize,
-{
-    let ordered: BTreeMap<_, _> = value.iter().collect();
-    ordered.serialize(serializer)
-}
-
-pub fn get_genesis_txn(config: &NodeConfig) -> anyhow::Result<&Transaction> {
-    config
-        .execution
-        .genesis
-        .as_ref()
-        .ok_or_else(|| anyhow::format_err!("Genesis txn not present."))
+pub fn get_genesis_txn(config: &NodeConfig) -> Option<&Transaction> {
+    config.execution.genesis.as_ref()
 }

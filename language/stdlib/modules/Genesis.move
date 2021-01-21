@@ -1,112 +1,111 @@
-// The genesis module. This defines the majority of the Move functions that
-// are executed, and the order in which they are executed in genesis. Note
-// however, that there are certain calls that remain in Rust code in
-// genesis (for now).
-address 0x0 {
+address 0x1 {
+
+/// The `Genesis` module defines the Move initialization entry point of the Diem framework
+/// when executing from a fresh state.
+///
+/// > TODO: Currently there are a few additional functions called from Rust during genesis.
+/// > Document which these are and in which order they are called.
 module Genesis {
-    use 0x0::Association::{Self, PublishModule};
-    use 0x0::CoreAddresses;
-    use 0x0::Coin1::{Self, Coin1};
-    use 0x0::Coin2::{Self, Coin2};
-    use 0x0::Event;
-    use 0x0::LBR::{Self, LBR};
-    use 0x0::Libra::{Self, AddCurrency};
-    use 0x0::LibraAccount;
-    use 0x0::LibraBlock;
-    use 0x0::LibraConfig;
-    use 0x0::LibraSystem;
-    use 0x0::LibraTimestamp;
-    use 0x0::LibraTransactionTimeout;
-    use 0x0::LibraVersion;
-    use 0x0::LibraWriteSetManager;
-    use 0x0::Signer;
-    use 0x0::Testnet;
-    use 0x0::TransactionFee;
-    use 0x0::Unhosted;
+    use 0x1::AccountFreezing;
+    use 0x1::ChainId;
+    use 0x1::XUS;
+    use 0x1::DualAttestation;
+    use 0x1::XDX;
+    use 0x1::Diem;
+    use 0x1::DiemAccount;
+    use 0x1::DiemBlock;
+    use 0x1::DiemConfig;
+    use 0x1::DiemSystem;
+    use 0x1::DiemTimestamp;
+    use 0x1::DiemTransactionPublishingOption;
+    use 0x1::DiemVersion;
+    use 0x1::TransactionFee;
+    use 0x1::DiemVMConfig;
 
+    /// Initializes the Diem framework.
     fun initialize(
-        association: &signer,
-        config_account: &signer,
-        fee_account: &signer,
+        dr_account: &signer,
         tc_account: &signer,
-        tc_addr: address,
-        genesis_auth_key: vector<u8>,
+        dr_auth_key: vector<u8>,
+        tc_auth_key: vector<u8>,
+        initial_script_allow_list: vector<vector<u8>>,
+        is_open_module: bool,
+        instruction_schedule: vector<u8>,
+        native_schedule: vector<u8>,
+        chain_id: u8,
     ) {
-        let dummy_auth_key_prefix = x"00000000000000000000000000000000";
 
-        // Association root setup
-        Association::initialize(association);
-        Association::grant_privilege<AddCurrency>(association, association);
-        Association::grant_privilege<PublishModule>(association, association);
+        DiemAccount::initialize(dr_account, x"00000000000000000000000000000000");
+
+        ChainId::initialize(dr_account, chain_id);
 
         // On-chain config setup
-        Event::publish_generator(config_account);
-        LibraConfig::initialize(config_account, association);
+        DiemConfig::initialize(dr_account);
 
         // Currency setup
-        Libra::initialize(config_account);
+        Diem::initialize(dr_account);
 
-        // Set that this is testnet
-        Testnet::initialize(association);
+        // Currency setup
+        XUS::initialize(dr_account, tc_account);
 
-        // Event and currency setup
-        Event::publish_generator(association);
-        let (coin1_mint_cap, coin1_burn_cap) = Coin1::initialize(association);
-        let (coin2_mint_cap, coin2_burn_cap) = Coin2::initialize(association);
-        LBR::initialize(association);
-
-        LibraAccount::initialize(association);
-        Unhosted::publish_global_limits_definition(association);
-        LibraAccount::create_genesis_account<LBR>(
-            Signer::address_of(association),
-            copy dummy_auth_key_prefix,
-        );
-        Libra::grant_mint_capability_to_association<Coin1>(association);
-        Libra::grant_mint_capability_to_association<Coin2>(association);
-
-        // Register transaction fee accounts
-        TransactionFee::initialize(association, fee_account, copy dummy_auth_key_prefix);
-
-        // Create the treasury compliance account
-        LibraAccount::create_treasury_compliance_account<LBR>(
-            association,
-            tc_addr,
-            copy dummy_auth_key_prefix,
-            coin1_mint_cap,
-            coin1_burn_cap,
-            coin2_mint_cap,
-            coin2_burn_cap,
+        XDX::initialize(
+            dr_account,
+            tc_account,
         );
 
-        // Create the config account
-        LibraAccount::create_genesis_account<LBR>(
-            CoreAddresses::DEFAULT_CONFIG_ADDRESS(),
-            dummy_auth_key_prefix
+        AccountFreezing::initialize(dr_account);
+
+        TransactionFee::initialize(tc_account);
+
+        DiemSystem::initialize_validator_set(
+            dr_account,
+        );
+        DiemVersion::initialize(
+            dr_account,
+        );
+        DualAttestation::initialize(
+            dr_account,
+        );
+        DiemBlock::initialize_block_metadata(dr_account);
+
+        let dr_rotate_key_cap = DiemAccount::extract_key_rotation_capability(dr_account);
+        DiemAccount::rotate_authentication_key(&dr_rotate_key_cap, dr_auth_key);
+        DiemAccount::restore_key_rotation_capability(dr_rotate_key_cap);
+
+        DiemTransactionPublishingOption::initialize(
+            dr_account,
+            initial_script_allow_list,
+            is_open_module,
         );
 
-        LibraTransactionTimeout::initialize(association);
-        LibraSystem::initialize_validator_set(config_account);
-        LibraVersion::initialize(config_account);
+        DiemVMConfig::initialize(
+            dr_account,
+            instruction_schedule,
+            native_schedule,
+        );
 
-        LibraBlock::initialize_block_metadata(association);
-        LibraWriteSetManager::initialize(association);
-        LibraTimestamp::initialize(association);
+        let tc_rotate_key_cap = DiemAccount::extract_key_rotation_capability(tc_account);
+        DiemAccount::rotate_authentication_key(&tc_rotate_key_cap, tc_auth_key);
+        DiemAccount::restore_key_rotation_capability(tc_rotate_key_cap);
 
-        let assoc_rotate_key_cap = LibraAccount::extract_key_rotation_capability(association);
-        LibraAccount::rotate_authentication_key(&assoc_rotate_key_cap, copy genesis_auth_key);
-        LibraAccount::restore_key_rotation_capability(assoc_rotate_key_cap);
+        // After we have called this function, all invariants which are guarded by
+        // `DiemTimestamp::is_operating() ==> ...` will become active and a verification condition.
+        // See also discussion at function specification.
+        DiemTimestamp::set_time_has_started(dr_account);
+    }
 
-        let config_rotate_key_cap = LibraAccount::extract_key_rotation_capability(config_account);
-        LibraAccount::rotate_authentication_key(&config_rotate_key_cap, copy genesis_auth_key);
-        LibraAccount::restore_key_rotation_capability(config_rotate_key_cap);
-
-        let fee_rotate_key_cap = LibraAccount::extract_key_rotation_capability(fee_account);
-        LibraAccount::rotate_authentication_key(&fee_rotate_key_cap, copy genesis_auth_key);
-        LibraAccount::restore_key_rotation_capability(fee_rotate_key_cap);
-
-        let tc_rotate_key_cap = LibraAccount::extract_key_rotation_capability(tc_account);
-        LibraAccount::rotate_authentication_key(&tc_rotate_key_cap, genesis_auth_key);
-        LibraAccount::restore_key_rotation_capability(tc_rotate_key_cap);
+    /// For verification of genesis, the goal is to prove that all the invariants which
+    /// become active after the end of this function hold. This cannot be achieved with
+    /// modular verification as we do in regular continuous testing. Rather, this module must
+    /// be verified **together** with the module(s) which provides the invariant.
+    ///
+    /// > TODO: currently verifying this module together with modules providing invariants
+    /// > (see above) times out. This can likely be solved by making more of the initialize
+    /// > functions called by this function opaque, and prove the according invariants locally to
+    /// > each module.
+    spec fun initialize {
+        /// Assume that this is called in genesis state (no timestamp).
+        requires DiemTimestamp::is_genesis();
     }
 
 }

@@ -1,10 +1,11 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
     parser::ast::{
-        BinOp, Field, FunctionName, FunctionVisibility, Kind, ModuleIdent, ResourceLoc,
-        SpecApplyPattern, SpecBlockTarget, SpecConditionKind, StructName, UnaryOp, Var,
+        BinOp, ConstantName, Field, FunctionName, FunctionVisibility, Kind, ModuleIdent, QuantKind,
+        ResourceLoc, SpecApplyPattern, SpecBlockTarget, SpecConditionKind, StructName, UnaryOp,
+        Var,
     },
     shared::{ast_debug::*, unique_map::UniqueMap, *},
 };
@@ -18,7 +19,7 @@ use std::{
 // Program
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Program {
     pub modules: UniqueMap<ModuleIdent, ModuleDefinition>,
     pub scripts: BTreeMap<String, Script>,
@@ -28,9 +29,10 @@ pub struct Program {
 // Scripts
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Script {
     pub loc: Loc,
+    pub constants: UniqueMap<ConstantName, Constant>,
     pub function_name: FunctionName,
     pub function: Function,
     pub specs: Vec<SpecBlock>,
@@ -40,12 +42,13 @@ pub struct Script {
 // Modules
 //**************************************************************************************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModuleDefinition {
     pub loc: Loc,
     pub is_source_module: bool,
     pub structs: UniqueMap<StructName, StructDefinition>,
     pub functions: UniqueMap<FunctionName, Function>,
+    pub constants: UniqueMap<ConstantName, Constant>,
     pub specs: Vec<SpecBlock>,
 }
 
@@ -55,7 +58,7 @@ pub struct ModuleDefinition {
 
 pub type Fields<T> = UniqueMap<Field, (usize, T)>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructDefinition {
     pub loc: Loc,
     pub resource_opt: ResourceLoc,
@@ -63,7 +66,7 @@ pub struct StructDefinition {
     pub fields: StructFields,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StructFields {
     Defined(Fields<Type>),
     Native(Loc),
@@ -73,14 +76,14 @@ pub enum StructFields {
 // Functions
 //**************************************************************************************************
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct FunctionSignature {
     pub type_parameters: Vec<(Name, Kind)>,
     pub parameters: Vec<(Var, Type)>,
     pub return_type: Type,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 
 pub enum FunctionBody_ {
     Defined(Sequence),
@@ -91,7 +94,7 @@ pub type FunctionBody = Spanned<FunctionBody_>;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct SpecId(usize);
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct Function {
     pub loc: Loc,
     pub visibility: FunctionVisibility,
@@ -102,24 +105,38 @@ pub struct Function {
 }
 
 //**************************************************************************************************
+// Constants
+//**************************************************************************************************
+
+#[derive(PartialEq, Clone, Debug)]
+pub struct Constant {
+    pub loc: Loc,
+    pub signature: Type,
+    pub value: Exp,
+}
+
+//**************************************************************************************************
 // Specification Blocks
 //**************************************************************************************************
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpecBlock_ {
     pub target: SpecBlockTarget,
     pub members: Vec<SpecBlockMember>,
 }
 pub type SpecBlock = Spanned<SpecBlock_>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum SpecBlockMember_ {
     Condition {
         kind: SpecConditionKind,
+        properties: Vec<PragmaProperty>,
         exp: Exp,
+        additional_exps: Vec<Exp>,
     },
     Function {
+        uninterpreted: bool,
         name: FunctionName,
         signature: FunctionSignature,
         body: FunctionBody,
@@ -130,7 +147,12 @@ pub enum SpecBlockMember_ {
         type_parameters: Vec<(Name, Kind)>,
         type_: Type,
     },
+    Let {
+        name: Name,
+        def: Exp,
+    },
     Include {
+        properties: Vec<PragmaProperty>,
         exp: Exp,
     },
     Apply {
@@ -144,12 +166,18 @@ pub enum SpecBlockMember_ {
 }
 pub type SpecBlockMember = Spanned<SpecBlockMember_>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PragmaProperty_ {
     pub name: Name,
-    pub value: Option<Value>,
+    pub value: Option<PragmaValue>,
 }
 pub type PragmaProperty = Spanned<PragmaProperty_>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PragmaValue {
+    Literal(Value),
+    Ident(ModuleAccess),
+}
 
 //**************************************************************************************************
 // Types
@@ -162,7 +190,7 @@ pub enum ModuleAccess_ {
 }
 pub type ModuleAccess = Spanned<ModuleAccess_>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Type_ {
     Unit,
@@ -178,7 +206,7 @@ pub type Type = Spanned<Type_>;
 // Expressions
 //**************************************************************************************************
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LValue_ {
     Var(ModuleAccess, Option<Vec<Type>>),
     Unpack(ModuleAccess, Option<Vec<Type>>, Fields<LValue>),
@@ -187,7 +215,12 @@ pub type LValue = Spanned<LValue_>;
 pub type LValueList_ = Vec<LValue>;
 pub type LValueList = Spanned<LValueList_>;
 
-#[derive(Debug, PartialEq)]
+pub type LValueWithRange_ = (LValue, Exp);
+pub type LValueWithRange = Spanned<LValueWithRange_>;
+pub type LValueWithRangeList_ = Vec<LValueWithRange>;
+pub type LValueWithRangeList = Spanned<LValueWithRangeList_>;
+
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum ExpDotted_ {
     Exp(Exp),
@@ -195,7 +228,7 @@ pub enum ExpDotted_ {
 }
 pub type ExpDotted = Spanned<ExpDotted_>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Value_ {
     // 0x<hex representation up to 64 digits with padding 0s>
     Address(Address),
@@ -212,7 +245,7 @@ pub enum Value_ {
 }
 pub type Value = Spanned<Value_>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Exp_ {
     Value(Value),
@@ -228,7 +261,8 @@ pub enum Exp_ {
     While(Box<Exp>, Box<Exp>),
     Loop(Box<Exp>),
     Block(Sequence),
-    Lambda(LValueList, Box<Exp>), // spec only
+    Lambda(LValueList, Box<Exp>),                    // spec only
+    Quant(QuantKind, LValueWithRangeList, Box<Exp>), // spec only
 
     Assign(LValueList, Box<Exp>),
     FieldMutate(Box<ExpDotted>, Box<Exp>),
@@ -260,7 +294,7 @@ pub enum Exp_ {
 pub type Exp = Spanned<Exp_>;
 
 pub type Sequence = VecDeque<SequenceItem>;
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SequenceItem_ {
     Seq(Exp),
     Declare(LValueList, Option<Type>),
@@ -353,10 +387,15 @@ impl AstDebug for Script {
     fn ast_debug(&self, w: &mut AstWriter) {
         let Script {
             loc: _loc,
+            constants,
             function_name,
             function,
             specs,
         } = self;
+        for cdef in constants {
+            cdef.ast_debug(w);
+            w.new_line();
+        }
         (function_name.clone(), function).ast_debug(w);
         for spec in specs {
             spec.ast_debug(w);
@@ -372,6 +411,7 @@ impl AstDebug for ModuleDefinition {
             is_source_module,
             structs,
             functions,
+            constants,
             specs,
         } = self;
         w.writeln(if *is_source_module {
@@ -381,6 +421,10 @@ impl AstDebug for ModuleDefinition {
         });
         for sdef in structs {
             sdef.ast_debug(w);
+            w.new_line();
+        }
+        for cdef in constants {
+            cdef.ast_debug(w);
             w.new_line();
         }
         for fdef in functions {
@@ -439,20 +483,31 @@ impl AstDebug for SpecBlock_ {
 impl AstDebug for SpecBlockMember_ {
     fn ast_debug(&self, w: &mut AstWriter) {
         match self {
-            SpecBlockMember_::Condition { kind, exp } => {
+            SpecBlockMember_::Condition {
+                kind,
+                properties: _,
+                exp,
+                additional_exps,
+            } => {
                 kind.ast_debug(w);
                 exp.ast_debug(w);
+                w.list(additional_exps, ",", |w, e| {
+                    e.ast_debug(w);
+                    true
+                });
             }
             SpecBlockMember_::Function {
+                uninterpreted,
                 signature,
                 name,
                 body,
             } => {
-                if let FunctionBody_::Native = &body.value {
+                if *uninterpreted {
+                    w.write("uninterpreted ")
+                } else if let FunctionBody_::Native = &body.value {
                     w.write("native ");
                 }
-                w.write("define ");
-                w.write(&format!("{}", name));
+                w.write(&format!("define {}", name));
                 signature.ast_debug(w);
                 match &body.value {
                     FunctionBody_::Defined(body) => w.block(|w| body.ast_debug(w)),
@@ -475,7 +530,11 @@ impl AstDebug for SpecBlockMember_ {
                 w.write(": ");
                 type_.ast_debug(w);
             }
-            SpecBlockMember_::Include { exp } => {
+            SpecBlockMember_::Let { name, def } => {
+                w.write(&format!("let {} = ", name));
+                def.ast_debug(w);
+            }
+            SpecBlockMember_::Include { properties: _, exp } => {
                 w.write("include ");
                 exp.ast_debug(w);
             }
@@ -515,7 +574,10 @@ impl AstDebug for PragmaProperty_ {
         w.write(&self.name.value);
         if let Some(value) = &self.value {
             w.write(" = ");
-            value.ast_debug(w);
+            match value {
+                PragmaValue::Literal(l) => l.ast_debug(w),
+                PragmaValue::Ident(i) => i.ast_debug(w),
+            }
         }
     }
 }
@@ -537,7 +599,7 @@ impl AstDebug for (FunctionName, &Function) {
         if let FunctionBody_::Native = &body.value {
             w.write("native ");
         }
-        w.write(&format!("{}", name));
+        w.write(&format!("fun {}", name));
         signature.ast_debug(w);
         if !acquires.is_empty() {
             w.write(" acquires ");
@@ -566,6 +628,24 @@ impl AstDebug for FunctionSignature {
         });
         w.write("): ");
         return_type.ast_debug(w)
+    }
+}
+
+impl AstDebug for (ConstantName, &Constant) {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        let (
+            name,
+            Constant {
+                loc: _loc,
+                signature,
+                value,
+            },
+        ) = self;
+        w.write(&format!("const {}:", name));
+        signature.ast_debug(w);
+        w.write(" = ");
+        value.ast_debug(w);
+        w.write(";");
     }
 }
 
@@ -732,6 +812,13 @@ impl AstDebug for Exp_ {
                 w.write(" ");
                 e.ast_debug(w);
             }
+            E::Quant(kind, sp!(_, rs), e) => {
+                kind.ast_debug(w);
+                w.write(" ");
+                rs.ast_debug(w);
+                w.write(": ");
+                e.ast_debug(w);
+            }
             E::ExpList(es) => {
                 w.write("(");
                 w.comma(es, |w, e| e.ast_debug(w));
@@ -876,5 +963,26 @@ impl AstDebug for LValue_ {
                 w.write("}");
             }
         }
+    }
+}
+
+impl AstDebug for Vec<LValueWithRange> {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        let parens = self.len() != 1;
+        if parens {
+            w.write("(");
+        }
+        w.comma(self, |w, b| b.ast_debug(w));
+        if parens {
+            w.write(")");
+        }
+    }
+}
+
+impl AstDebug for (LValue, Exp) {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        self.0.ast_debug(w);
+        w.write(" in ");
+        self.1.ast_debug(w);
     }
 }

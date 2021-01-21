@@ -1,33 +1,45 @@
-FROM debian:buster AS toolchain
+FROM debian:buster-20210111@sha256:a5edb9fa5b2a8d6665ed911466827734795ef10d2b3985a46b7e9c7f0161a6b3 AS toolchain
 
 # To use http/https proxy while building, use:
 # docker build --build-arg https_proxy=http://fwdproxy:8080 --build-arg http_proxy=http://fwdproxy:8080
 
-RUN apt-get update && apt-get install -y cmake curl clang git
+RUN apt-get update && apt-get install -y cmake curl clang git pkg-config libssl-dev
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
 ENV PATH "$PATH:/root/.cargo/bin"
 
-WORKDIR /libra
-COPY rust-toolchain /libra/rust-toolchain
+WORKDIR /diem
+COPY rust-toolchain /diem/rust-toolchain
 RUN rustup install $(cat rust-toolchain)
+
+COPY cargo-toolchain /diem/cargo-toolchain
+RUN rustup install $(cat cargo-toolchain)
 
 FROM toolchain AS builder
 
-COPY . /libra
+ARG ENABLE_FAILPOINTS
+COPY . /diem
 
-ENV RUSTFLAGS "-Ctarget-cpu=skylake -Ctarget-feature=+aes,+sse2,+sse4.1,+ssse3"
-RUN cargo build --release -p libra-node -p cli -p config-builder -p libra-key-manager -p safety-rules && cd target/release && rm -r build deps incremental
-RUN strip target/release/cli
+RUN ./docker/build-common.sh
+
+### Pre-Production Image ###
+FROM debian:buster-20210111-slim@sha256:b1af07039fe341833982bae85a2724ac8600ec5c74c37277c7a6ef7cddfb2cd0 AS pre-prod
+
+RUN apt-get update && apt-get install -y libssl1.1 ca-certificates && apt-get clean && rm -r /var/lib/apt/lists/*
+
+RUN mkdir -p /opt/diem/bin /opt/diem/etc
+COPY --from=builder /diem/target/release/cli /opt/diem/bin/diem_client
+
+### Test pre-production Image ###
+FROM pre-prod as testing
+
+RUN /opt/diem/bin/diem_client -h
 
 ### Production Image ###
-FROM debian:buster-slim AS prod
+FROM pre-prod AS prod
 
-RUN mkdir -p /opt/libra/bin /opt/libra/etc
-COPY --from=builder /libra/target/release/cli /opt/libra/bin/libra_client
-
-ENTRYPOINT ["/opt/libra/bin/libra_client"]
-CMD ["--url", "https://client.testnet.libra.org", "--waypoint_url",  "https://developers.libra.org/testnet_waypoint.txt"]
+ENTRYPOINT ["/opt/diem/bin/diem_client"]
+CMD ["--url", "https://testnet.diem.com/v1", "--waypoint_url",  "https://testnet.diem.com/waypoint.txt", "--chain-id", "TESTNET"]
 
 ARG BUILD_DATE
 ARG GIT_REV
