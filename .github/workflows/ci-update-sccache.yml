@@ -1,6 +1,8 @@
 name: ci-update-sccache
 
 on:
+  create:
+    branches: [main, release-*, gha-test-*]
   push:
     branches: [main, release-*, gha-test-*]
 
@@ -14,6 +16,8 @@ env:
 
 jobs:
   update-sccache-osx:
+    environment:
+      name: Sccache
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v2
@@ -24,18 +28,18 @@ jobs:
           fetch-depth: 0 #get all the history!!!
       - id: changes
         name: determine changes
-        uses: ./.github/actions/changes
+        uses: diem/actions/changes@0e2c66f81f92149dfdfe791a753d28ce9f808eda
         with:
           workflow-file: ci-update-sccache.yml
       - id: rust-changes
         name: find rust/cargo changes.
-        uses: ./.github/actions/matches
+        uses: diem/actions/matches@0e2c66f81f92149dfdfe791a753d28ce9f808eda
         with:
           pattern: '^documentation\|^docker\|^scripts'
           invert: "true"
       - uses: ./.github/actions/build-setup
         if: ${{ steps.rust-changes.outputs.changes-found == 'true' }}
-      - uses: actions/cache@v2
+      - uses: actions/cache@v2.1.5
         if: ${{ steps.rust-changes.outputs.changes-found == 'true' }}
         with:
           path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
@@ -48,7 +52,7 @@ jobs:
           echo stats:
           sccache -s
         env:
-          SCCACHE_AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
-          SCCACHE_AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
+          SCCACHE_AWS_ACCESS_KEY_ID: ${{ secrets.ENV_DIEM_S3_AWS_ACCESS_KEY_ID }}
+          SCCACHE_AWS_SECRET_ACCESS_KEY: ${{ secrets.ENV_DIEM_S3_AWS_SECRET_ACCESS_KEY }}
       - uses: ./.github/actions/build-teardown
         if: ${{ steps.rust-changes.outputs.changes-found == 'true' }}

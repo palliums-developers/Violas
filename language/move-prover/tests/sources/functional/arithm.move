@@ -1,9 +1,9 @@
-// Test works with v2:
-module TestArithmetic {
-
+// also_include_for: cvc4
+module 0x42::TestArithmetic {
     spec module {
         pragma verify = true;
     }
+
     // --------------------------
     // Basic arithmetic operation
     // --------------------------

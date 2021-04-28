@@ -6,14 +6,14 @@ use crate::{
     logging::LogContext,
     runtime::VMRuntime,
 };
+use move_binary_format::errors::*;
 use move_core_types::{
     account_address::AccountAddress,
     effects::{ChangeSet, Event},
     identifier::IdentStr,
     language_storage::{ModuleId, TypeTag},
 };
-use move_vm_types::gas_schedule::CostStrategy;
-use vm::errors::*;
+use move_vm_types::gas_schedule::GasStatus;
 
 pub struct Session<'r, 'l, R> {
     pub(crate) runtime: &'l VMRuntime,
@@ -42,7 +42,7 @@ impl<'r, 'l, R: RemoteCache> Session<'r, 'l, R> {
         function_name: &IdentStr,
         ty_args: Vec<TypeTag>,
         args: Vec<Vec<u8>>,
-        cost_strategy: &mut CostStrategy,
+        gas_status: &mut GasStatus,
         log_context: &impl LogContext,
     ) -> VMResult<Vec<Vec<u8>>> {
         self.runtime.execute_function(
@@ -51,7 +51,7 @@ impl<'r, 'l, R: RemoteCache> Session<'r, 'l, R> {
             ty_args,
             args,
             &mut self.data_cache,
-            cost_strategy,
+            gas_status,
             log_context,
         )
     }
@@ -87,7 +87,7 @@ impl<'r, 'l, R: RemoteCache> Session<'r, 'l, R> {
         ty_args: Vec<TypeTag>,
         args: Vec<Vec<u8>>,
         senders: Vec<AccountAddress>,
-        cost_strategy: &mut CostStrategy,
+        gas_status: &mut GasStatus,
         log_context: &impl LogContext,
     ) -> VMResult<()> {
         self.runtime.execute_script_function(
@@ -97,7 +97,7 @@ impl<'r, 'l, R: RemoteCache> Session<'r, 'l, R> {
             args,
             senders,
             &mut self.data_cache,
-            cost_strategy,
+            gas_status,
             log_context,
         )
     }
@@ -124,7 +124,7 @@ impl<'r, 'l, R: RemoteCache> Session<'r, 'l, R> {
         ty_args: Vec<TypeTag>,
         args: Vec<Vec<u8>>,
         senders: Vec<AccountAddress>,
-        cost_strategy: &mut CostStrategy,
+        gas_status: &mut GasStatus,
         log_context: &impl LogContext,
     ) -> VMResult<()> {
         self.runtime.execute_script(
@@ -133,7 +133,7 @@ impl<'r, 'l, R: RemoteCache> Session<'r, 'l, R> {
             args,
             senders,
             &mut self.data_cache,
-            cost_strategy,
+            gas_status,
             log_context,
         )
     }
@@ -155,14 +155,14 @@ impl<'r, 'l, R: RemoteCache> Session<'r, 'l, R> {
         &mut self,
         module: Vec<u8>,
         sender: AccountAddress,
-        cost_strategy: &mut CostStrategy,
+        gas_status: &mut GasStatus,
         log_context: &impl LogContext,
     ) -> VMResult<()> {
         self.runtime.publish_module(
             module,
             sender,
             &mut self.data_cache,
-            cost_strategy,
+            gas_status,
             log_context,
         )
     }

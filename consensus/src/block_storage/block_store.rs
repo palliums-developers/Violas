@@ -23,7 +23,6 @@ use consensus_types::{
 use diem_crypto::HashValue;
 use diem_infallible::RwLock;
 use diem_logger::prelude::*;
-use diem_trace::prelude::*;
 use diem_types::{ledger_info::LedgerInfoWithSignatures, transaction::TransactionStatus};
 use executor_types::{Error, StateComputeResult};
 use short_hex_str::AsShortHexStr;
@@ -214,9 +213,6 @@ impl BlockStore {
         let blocks_to_commit = self
             .path_from_root(block_id_to_commit)
             .unwrap_or_else(Vec::new);
-        for block in &blocks_to_commit {
-            end_trace!("commit", {"block", block.id()});
-        }
 
         self.state_computer
             .commit(
@@ -329,8 +325,6 @@ impl BlockStore {
     }
 
     fn execute_block(&self, block: Block) -> anyhow::Result<ExecutedBlock, Error> {
-        trace_code_block!("block_store::execute_block", {"block", block.id()});
-
         // Although NIL blocks don't have a payload, we still send a T::default() to compute
         // because we may inject a block prologue transaction.
         let state_compute_result = self.state_computer.compute(&block, block.parent_id())?;
@@ -478,6 +472,6 @@ impl BlockStore {
     /// Helper function to insert the block with the qc together
     pub fn insert_block_with_qc(&self, block: Block) -> anyhow::Result<Arc<ExecutedBlock>> {
         self.insert_single_quorum_cert(block.quorum_cert().clone())?;
-        Ok(self.execute_and_insert_block(block)?)
+        self.execute_and_insert_block(block)
     }
 }

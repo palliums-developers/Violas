@@ -9,9 +9,8 @@
 use crate::{
     access_path::{AbsAddr, AccessPath, AccessPathMap, FootprintDomain, Offset, Root},
     dataflow_analysis::{AbstractDomain, JoinResult, MapDomain},
-    function_target::FunctionTarget,
 };
-use move_model::{ast::TempIndex, ty::Type};
+use move_model::{ast::TempIndex, model::FunctionEnv, ty::Type};
 use std::{
     collections::btree_map::Entry,
     fmt,
@@ -236,22 +235,17 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
         mut weak_update: bool,
     ) {
         let (root, offsets) = ap.into();
-        let key = match root {
-            Root::Local(i) =>
+        let needs_weak_update = match &root {
             // local base. strong update possible because of Move aliasing semantics
-            {
-                Root::local(i)
-            }
-            Root::Global(g) =>
+            Root::Local(_) | Root::Formal(_) | Root::Return(_) => false,
             // global base. must do weak update unless g is statically known
-            {
-                weak_update = weak_update || !g.is_statically_known();
-                Root::global(g)
-            }
-            Root::Return(_) => panic!("Invalid: updating return"),
+            Root::Global(g) => !g.is_statically_known(),
+        };
+        if needs_weak_update {
+            weak_update = true
         };
 
-        let mut node = self.0.entry(key).or_insert_with(TrieNode::default);
+        let mut node = self.0.entry(root).or_insert_with(TrieNode::default);
         for offset in offsets.into_iter() {
             // if one of the offsets is not statically known, we must do a weak update
             weak_update = weak_update || !offset.is_statically_known();
@@ -266,18 +260,23 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
     }
 
     /// Bind `data` to `local_index` in the trie, overwriting the old value of `local_index`
-    pub fn bind_local(&mut self, local_index: TempIndex, data: T) {
-        self.bind_root(Root::local(local_index), data)
+    pub fn bind_local(&mut self, local_index: TempIndex, data: T, fun_env: &FunctionEnv) {
+        self.bind_root(Root::from_index(local_index, fun_env), data)
     }
 
     /// Bind `node` to `local_index` in the trie, overwriting the old value of `local_index`
-    pub fn bind_local_node(&mut self, local_index: TempIndex, node: TrieNode<T>) {
-        self.0.insert(Root::local(local_index), node);
+    pub fn bind_local_node(
+        &mut self,
+        local_index: TempIndex,
+        node: TrieNode<T>,
+        fun_env: &FunctionEnv,
+    ) {
+        self.0.insert(Root::from_index(local_index, fun_env), node);
     }
 
     /// Remove the value bound to the local variable `local_index`
-    pub fn remove_local(&mut self, local_index: TempIndex) {
-        self.0.remove(&Root::Local(local_index));
+    pub fn remove_local(&mut self, local_index: TempIndex, fun_env: &FunctionEnv) {
+        self.0.remove(&Root::from_index(local_index, fun_env));
     }
 
     /// Bind `data` to the return variable `return_index`
@@ -290,20 +289,24 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
     }
 
     /// Retrieve the data associated with `local_index` in the trie. Returns `None` if there is no associated data
-    pub fn get_local(&self, local_index: TempIndex) -> Option<&T> {
-        self.get_local_node(local_index)
+    pub fn get_local(&self, local_index: TempIndex, fun_env: &FunctionEnv) -> Option<&T> {
+        self.get_local_node(local_index, fun_env)
             .map(|n| n.data.as_ref())
             .flatten()
     }
 
     /// Retrieve the node associated with `local_index` in the trie. Returns `None` if there is no associated node
-    pub fn get_local_node(&self, local_index: TempIndex) -> Option<&TrieNode<T>> {
-        self.0.get(&Root::local(local_index))
+    pub fn get_local_node(
+        &self,
+        local_index: TempIndex,
+        fun_env: &FunctionEnv,
+    ) -> Option<&TrieNode<T>> {
+        self.0.get(&Root::from_index(local_index, fun_env))
     }
 
     /// Return `true` if there is a value bound to local variable `local_index`
-    pub fn local_exists(&self, local_index: TempIndex) -> bool {
-        self.0.contains_key(&Root::local(local_index))
+    pub fn local_exists(&self, local_index: TempIndex, fun_env: &FunctionEnv) -> bool {
+        self.0.contains_key(&Root::from_index(local_index, fun_env))
     }
 
     /// Bind caller data in `actuals`, `type_actuals`, and `sub_map` to `self`.
@@ -373,7 +376,7 @@ impl<T: FootprintDomain> AccessPathTrie<T> {
     }
 
     /// Return a wrapper that of `self` that implements `Display` using `env`
-    pub fn display<'a>(&'a self, env: &'a FunctionTarget) -> AccessPathTrieDisplay<'a, T> {
+    pub fn display<'a>(&'a self, env: &'a FunctionEnv) -> AccessPathTrieDisplay<'a, T> {
         AccessPathTrieDisplay { t: self, env }
     }
 }
@@ -412,7 +415,7 @@ impl<T: FootprintDomain> DerefMut for AccessPathTrie<T> {
 
 pub struct AccessPathTrieDisplay<'a, T: FootprintDomain> {
     t: &'a AccessPathTrie<T>,
-    env: &'a FunctionTarget<'a>,
+    env: &'a FunctionEnv<'a>,
 }
 
 impl<'a, T: FootprintDomain> fmt::Display for AccessPathTrieDisplay<'a, T> {

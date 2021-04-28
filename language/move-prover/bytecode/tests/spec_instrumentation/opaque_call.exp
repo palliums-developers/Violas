@@ -105,8 +105,8 @@ fun Test::get_and_incr($t0|addr: address): u64 {
  19: $t11 := +($t9, $t10) on_abort goto 30 with $t6
  20: $t12 := borrow_field<Test::R>.v($t7)
  21: write_ref($t12, $t11)
- 22: write_back[Reference($t7)]($t12)
- 23: write_back[Test::R]($t7)
+ 22: write_back[Reference($t7).0]($t12)
+ 23: write_back[Test::R.D]($t7)
  24: label L3
      # VC: function does not abort under this condition at tests/spec_instrumentation/opaque_call.move:16:6+35
  25: assert Not(Not(exists[@0]<Test::R>($t0)))
@@ -142,7 +142,7 @@ fun Test::incr_twice() {
   3: nop
      # VC: precondition does not hold at this call at tests/spec_instrumentation/opaque_call.move:15:6+21
   4: assert Neq<address>($t0, 0)
-  5: assume Eq($t1, Or(Not(exists<Test::R>($t0)), Ge(Add(select Test::R.v(global<Test::R>($t0)), 1), 18446744073709551615)))
+  5: assume Identical($t1, Or(Not(exists<Test::R>($t0)), Ge(Add(select Test::R.v(global<Test::R>($t0)), 1), 18446744073709551615)))
   6: if ($t1) goto 7 else goto 11
   7: label L4
   8: assume Or(And(Not(exists<Test::R>($t0)), Eq(33, $t2)), Ge(Add(select Test::R.v(global<Test::R>($t0)), 1), 18446744073709551615))
@@ -162,7 +162,7 @@ fun Test::incr_twice() {
  20: nop
      # VC: precondition does not hold at this call at tests/spec_instrumentation/opaque_call.move:15:6+21
  21: assert Neq<address>($t4, 0)
- 22: assume Eq($t5, Or(Not(exists<Test::R>($t4)), Ge(Add(select Test::R.v(global<Test::R>($t4)), 1), 18446744073709551615)))
+ 22: assume Identical($t5, Or(Not(exists<Test::R>($t4)), Ge(Add(select Test::R.v(global<Test::R>($t4)), 1), 18446744073709551615)))
  23: if ($t5) goto 24 else goto 28
  24: label L6
  25: assume Or(And(Not(exists<Test::R>($t4)), Eq(33, $t2)), Ge(Add(select Test::R.v(global<Test::R>($t4)), 1), 18446744073709551615))

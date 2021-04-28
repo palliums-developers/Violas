@@ -23,7 +23,7 @@ module ValidatorAdministrationScripts {
     /// # Parameters
     /// | Name                | Type         | Description                                                                                                                        |
     /// | ------              | ------       | -------------                                                                                                                      |
-    /// | `dr_account`        | `&signer`    | The signer reference of the sending account of this transaction. Must be the Diem Root signer.                                     |
+    /// | `dr_account`        | `signer`     | The signer of the sending account of this transaction. Must be the Diem Root signer.                                               |
     /// | `sliding_nonce`     | `u64`        | The `sliding_nonce` (see: `SlidingNonce`) to be used for this transaction.                                                         |
     /// | `validator_name`    | `vector<u8>` | ASCII-encoded human name for the validator. Must match the human name in the `ValidatorConfig::ValidatorConfig` for the validator. |
     /// | `validator_address` | `address`    | The validator account address to be added to the validator set.                                                                    |
@@ -53,14 +53,14 @@ module ValidatorAdministrationScripts {
     /// * `ValidatorAdministrationScripts::set_validator_config_and_reconfigure`
 
     public(script) fun add_validator_and_reconfigure(
-        dr_account: &signer,
+        dr_account: signer,
         sliding_nonce: u64,
         validator_name: vector<u8>,
         validator_address: address
     ) {
-        SlidingNonce::record_nonce_or_abort(dr_account, sliding_nonce);
+        SlidingNonce::record_nonce_or_abort(&dr_account, sliding_nonce);
         assert(ValidatorConfig::get_human_name(validator_address) == validator_name, 0);
-        DiemSystem::add_validator(dr_account, validator_address);
+        DiemSystem::add_validator(&dr_account, validator_address);
     }
 
 
@@ -96,7 +96,7 @@ module ValidatorAdministrationScripts {
         include DiemConfig::ReconfigureEmits;
 
         /// **Access Control:**
-        /// Only the Diem Root account can add Validators [[H13]][PERMISSION].
+        /// Only the Diem Root account can add Validators [[H14]][PERMISSION].
         include Roles::AbortsIfNotDiemRoot{account: dr_account};
     }
 
@@ -113,13 +113,13 @@ module ValidatorAdministrationScripts {
     /// only "locally" under the `validator_account` account address.
     ///
     /// # Parameters
-    /// | Name                          | Type         | Description                                                                                                                  |
-    /// | ------                        | ------       | -------------                                                                                                                |
-    /// | `validator_operator_account`  | `&signer`    | Signer reference of the sending account. Must be the registered validator operator for the validator at `validator_address`. |
-    /// | `validator_account`           | `address`    | The address of the validator's `ValidatorConfig::ValidatorConfig` resource being updated.                                    |
-    /// | `consensus_pubkey`            | `vector<u8>` | New Ed25519 public key to be used in the updated `ValidatorConfig::ValidatorConfig`.                                         |
-    /// | `validator_network_addresses` | `vector<u8>` | New set of `validator_network_addresses` to be used in the updated `ValidatorConfig::ValidatorConfig`.                       |
-    /// | `fullnode_network_addresses`  | `vector<u8>` | New set of `fullnode_network_addresses` to be used in the updated `ValidatorConfig::ValidatorConfig`.                        |
+    /// | Name                          | Type         | Description                                                                                                        |
+    /// | ------                        | ------       | -------------                                                                                                      |
+    /// | `validator_operator_account`  | `signer`     | Signer of the sending account. Must be the registered validator operator for the validator at `validator_address`. |
+    /// | `validator_account`           | `address`    | The address of the validator's `ValidatorConfig::ValidatorConfig` resource being updated.                          |
+    /// | `consensus_pubkey`            | `vector<u8>` | New Ed25519 public key to be used in the updated `ValidatorConfig::ValidatorConfig`.                               |
+    /// | `validator_network_addresses` | `vector<u8>` | New set of `validator_network_addresses` to be used in the updated `ValidatorConfig::ValidatorConfig`.             |
+    /// | `fullnode_network_addresses`  | `vector<u8>` | New set of `fullnode_network_addresses` to be used in the updated `ValidatorConfig::ValidatorConfig`.              |
     ///
     /// # Common Abort Conditions
     /// | Error Category             | Error Reason                                   | Description                                                                                           |
@@ -138,7 +138,7 @@ module ValidatorAdministrationScripts {
     /// * `ValidatorAdministrationScripts::set_validator_config_and_reconfigure`
 
     public(script) fun register_validator_config(
-        validator_operator_account: &signer,
+        validator_operator_account: signer,
         // TODO Rename to validator_addr, since it is an address.
         validator_account: address,
         consensus_pubkey: vector<u8>,
@@ -146,7 +146,7 @@ module ValidatorAdministrationScripts {
         fullnode_network_addresses: vector<u8>,
     ) {
         ValidatorConfig::set_config(
-            validator_operator_account,
+            &validator_operator_account,
             validator_account,
             consensus_pubkey,
             validator_network_addresses,
@@ -171,7 +171,7 @@ module ValidatorAdministrationScripts {
 
         /// **Access Control:**
         /// Only the Validator Operator account which has been registered with the validator can
-        /// update the validator's configuration [[H14]][PERMISSION].
+        /// update the validator's configuration [[H15]][PERMISSION].
         aborts_if Signer::address_of(validator_operator_account) !=
                     ValidatorConfig::get_operator(validator_account)
                         with Errors::INVALID_ARGUMENT;
@@ -192,7 +192,7 @@ module ValidatorAdministrationScripts {
     /// # Parameters
     /// | Name                | Type         | Description                                                                                                                        |
     /// | ------              | ------       | -------------                                                                                                                      |
-    /// | `dr_account`        | `&signer`    | The signer reference of the sending account of this transaction. Must be the Diem Root signer.                                    |
+    /// | `dr_account`        | `signer`     | The signer of the sending account of this transaction. Must be the Diem Root signer.                                               |
     /// | `sliding_nonce`     | `u64`        | The `sliding_nonce` (see: `SlidingNonce`) to be used for this transaction.                                                         |
     /// | `validator_name`    | `vector<u8>` | ASCII-encoded human name for the validator. Must match the human name in the `ValidatorConfig::ValidatorConfig` for the validator. |
     /// | `validator_address` | `address`    | The validator account address to be removed from the validator set.                                                                |
@@ -221,15 +221,15 @@ module ValidatorAdministrationScripts {
     /// * `ValidatorAdministrationScripts::set_validator_config_and_reconfigure`
 
     public(script) fun remove_validator_and_reconfigure(
-        dr_account: &signer,
+        dr_account: signer,
         sliding_nonce: u64,
         validator_name: vector<u8>,
         validator_address: address
     ) {
-        SlidingNonce::record_nonce_or_abort(dr_account, sliding_nonce);
+        SlidingNonce::record_nonce_or_abort(&dr_account, sliding_nonce);
         // TODO: Use an error code from Errors.move
         assert(ValidatorConfig::get_human_name(validator_address) == validator_name, 0);
-        DiemSystem::remove_validator(dr_account, validator_address);
+        DiemSystem::remove_validator(&dr_account, validator_address);
     }
 
     spec fun remove_validator_and_reconfigure {
@@ -263,7 +263,7 @@ module ValidatorAdministrationScripts {
         include DiemConfig::ReconfigureEmits;
 
         /// **Access Control:**
-        /// Only the Diem Root account can remove Validators [[H13]][PERMISSION].
+        /// Only the Diem Root account can remove Validators [[H14]][PERMISSION].
         include Roles::AbortsIfNotDiemRoot{account: dr_account};
     }
 
@@ -279,13 +279,13 @@ module ValidatorAdministrationScripts {
     /// on-chain with the updated `ValidatorConfig::ValidatorConfig`.
     ///
     /// # Parameters
-    /// | Name                          | Type         | Description                                                                                                                  |
-    /// | ------                        | ------       | -------------                                                                                                                |
-    /// | `validator_operator_account`  | `&signer`    | Signer reference of the sending account. Must be the registered validator operator for the validator at `validator_address`. |
-    /// | `validator_account`           | `address`    | The address of the validator's `ValidatorConfig::ValidatorConfig` resource being updated.                                    |
-    /// | `consensus_pubkey`            | `vector<u8>` | New Ed25519 public key to be used in the updated `ValidatorConfig::ValidatorConfig`.                                         |
-    /// | `validator_network_addresses` | `vector<u8>` | New set of `validator_network_addresses` to be used in the updated `ValidatorConfig::ValidatorConfig`.                       |
-    /// | `fullnode_network_addresses`  | `vector<u8>` | New set of `fullnode_network_addresses` to be used in the updated `ValidatorConfig::ValidatorConfig`.                        |
+    /// | Name                          | Type         | Description                                                                                                        |
+    /// | ------                        | ------       | -------------                                                                                                      |
+    /// | `validator_operator_account`  | `signer`     | Signer of the sending account. Must be the registered validator operator for the validator at `validator_address`. |
+    /// | `validator_account`           | `address`    | The address of the validator's `ValidatorConfig::ValidatorConfig` resource being updated.                          |
+    /// | `consensus_pubkey`            | `vector<u8>` | New Ed25519 public key to be used in the updated `ValidatorConfig::ValidatorConfig`.                               |
+    /// | `validator_network_addresses` | `vector<u8>` | New set of `validator_network_addresses` to be used in the updated `ValidatorConfig::ValidatorConfig`.             |
+    /// | `fullnode_network_addresses`  | `vector<u8>` | New set of `fullnode_network_addresses` to be used in the updated `ValidatorConfig::ValidatorConfig`.              |
     ///
     /// # Common Abort Conditions
     /// | Error Category             | Error Reason                                   | Description                                                                                           |
@@ -306,20 +306,20 @@ module ValidatorAdministrationScripts {
     /// * `ValidatorAdministrationScripts::register_validator_config`
 
     public(script) fun set_validator_config_and_reconfigure(
-        validator_operator_account: &signer,
+        validator_operator_account: signer,
         validator_account: address,
         consensus_pubkey: vector<u8>,
         validator_network_addresses: vector<u8>,
         fullnode_network_addresses: vector<u8>,
     ) {
         ValidatorConfig::set_config(
-            validator_operator_account,
+            &validator_operator_account,
             validator_account,
             consensus_pubkey,
             validator_network_addresses,
             fullnode_network_addresses
         );
-        DiemSystem::update_config_and_reconfigure(validator_operator_account, validator_account);
+        DiemSystem::update_config_and_reconfigure(&validator_operator_account, validator_account);
      }
 
     spec fun set_validator_config_and_reconfigure {
@@ -371,9 +371,11 @@ module ValidatorAdministrationScripts {
             Errors::INVALID_ARGUMENT,
             Errors::INVALID_STATE;
 
+        include is_validator_info_updated ==> DiemConfig::ReconfigureEmits;
+
         /// **Access Control:**
         /// Only the Validator Operator account which has been registered with the validator can
-        /// update the validator's configuration [[H14]][PERMISSION].
+        /// update the validator's configuration [[H15]][PERMISSION].
         aborts_if Signer::address_of(validator_operator_account) !=
                     ValidatorConfig::get_operator(validator_account)
                         with Errors::INVALID_ARGUMENT;
@@ -396,7 +398,7 @@ module ValidatorAdministrationScripts {
     /// # Parameters
     /// | Name               | Type         | Description                                                                                  |
     /// | ------             | ------       | -------------                                                                                |
-    /// | `account`          | `&signer`    | The signer reference of the sending account of the transaction.                              |
+    /// | `account`          | `signer`     | The signer of the sending account of the transaction.                                        |
     /// | `operator_name`    | `vector<u8>` | Validator operator's human name.                                                             |
     /// | `operator_account` | `address`    | Address of the validator operator account to be added as the `account` validator's operator. |
     ///
@@ -419,12 +421,12 @@ module ValidatorAdministrationScripts {
     /// * `ValidatorAdministrationScripts::set_validator_config_and_reconfigure`
 
     public(script) fun set_validator_operator(
-        account: &signer,
+        account: signer,
         operator_name: vector<u8>,
         operator_account: address
     ) {
         assert(ValidatorOperatorConfig::get_human_name(operator_account) == operator_name, 0);
-        ValidatorConfig::set_operator(account, operator_account);
+        ValidatorConfig::set_operator(&account, operator_account);
     }
 
     spec fun set_validator_operator {
@@ -451,7 +453,7 @@ module ValidatorAdministrationScripts {
             Errors::REQUIRES_ROLE;
 
         /// **Access Control:**
-        /// Only a Validator account can set its Validator Operator [[H15]][PERMISSION].
+        /// Only a Validator account can set its Validator Operator [[H16]][PERMISSION].
         include Roles::AbortsIfNotValidator{validator_addr: account_addr};
     }
 
@@ -470,13 +472,13 @@ module ValidatorAdministrationScripts {
     /// the system is initiated by this script.
     ///
     /// # Parameters
-    /// | Name               | Type         | Description                                                                                                  |
-    /// | ------             | ------       | -------------                                                                                                |
-    /// | `dr_account`       | `&signer`    | The signer reference of the sending account of the write set transaction. May only be the Diem Root signer. |
-    /// | `account`          | `&signer`    | Signer reference of account specified in the `execute_as` field of the write set transaction.                |
-    /// | `sliding_nonce`    | `u64`        | The `sliding_nonce` (see: `SlidingNonce`) to be used for this transaction for Diem Root.                    |
-    /// | `operator_name`    | `vector<u8>` | Validator operator's human name.                                                                             |
-    /// | `operator_account` | `address`    | Address of the validator operator account to be added as the `account` validator's operator.                 |
+    /// | Name               | Type         | Description                                                                                   |
+    /// | ------             | ------       | -------------                                                                                 |
+    /// | `dr_account`       | `signer`     | Signer of the sending account of the write set transaction. May only be the Diem Root signer. |
+    /// | `account`          | `signer`     | Signer of account specified in the `execute_as` field of the write set transaction.           |
+    /// | `sliding_nonce`    | `u64`        | The `sliding_nonce` (see: `SlidingNonce`) to be used for this transaction for Diem Root.      |
+    /// | `operator_name`    | `vector<u8>` | Validator operator's human name.                                                              |
+    /// | `operator_account` | `address`    | Address of the validator operator account to be added as the `account` validator's operator.  |
     ///
     /// # Common Abort Conditions
     /// | Error Category             | Error Reason                                          | Description                                                                                                                                                  |
@@ -502,15 +504,15 @@ module ValidatorAdministrationScripts {
     /// * `ValidatorAdministrationScripts::set_validator_config_and_reconfigure`
 
     public(script) fun set_validator_operator_with_nonce_admin(
-        dr_account: &signer,
-        account: &signer,
+        dr_account: signer,
+        account: signer,
         sliding_nonce: u64,
         operator_name: vector<u8>,
         operator_account: address
     ) {
-        SlidingNonce::record_nonce_or_abort(dr_account, sliding_nonce);
+        SlidingNonce::record_nonce_or_abort(&dr_account, sliding_nonce);
         assert(ValidatorOperatorConfig::get_human_name(operator_account) == operator_name, 0);
-        ValidatorConfig::set_operator(account, operator_account);
+        ValidatorConfig::set_operator(&account, operator_account);
     }
 
     spec fun set_validator_operator_with_nonce_admin {
@@ -538,7 +540,7 @@ module ValidatorAdministrationScripts {
         /// **Access Control:**
         /// Only the Diem Root account can process the admin scripts [[H9]][PERMISSION].
         requires Roles::has_diem_root_role(dr_account); /// This is ensured by DiemAccount::writeset_prologue.
-        /// Only a Validator account can set its Validator Operator [[H15]][PERMISSION].
+        /// Only a Validator account can set its Validator Operator [[H16]][PERMISSION].
         include Roles::AbortsIfNotValidator{validator_addr: account_addr};
     }
 }

@@ -5,9 +5,9 @@
 
 use anyhow::Context;
 use bytecode_verifier::{dependencies, verify_module, verify_script};
-use compiled_stdlib::{stdlib_modules, StdLibOptions};
 use compiler::{util, Compiler};
 use ir_to_bytecode::parser::{parse_module, parse_script};
+use move_binary_format::{errors::VMError, file_format::CompiledModule};
 use move_core_types::account_address::AccountAddress;
 use std::{
     fs,
@@ -15,7 +15,6 @@ use std::{
     path::{Path, PathBuf},
 };
 use structopt::StructOpt;
-use vm::{errors::VMError, file_format::CompiledModule};
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "IR Compiler", about = "Move IR to bytecode compiler.")]
@@ -60,7 +59,7 @@ fn do_verify_module(module: CompiledModule, dependencies: &[CompiledModule]) -> 
     module
 }
 
-fn write_output(path: &PathBuf, buf: &[u8]) {
+fn write_output(path: &Path, buf: &[u8]) {
     let mut f = fs::File::create(path)
         .with_context(|| format!("Unable to open output file {:?}", path))
         .unwrap();
@@ -129,9 +128,7 @@ fn main() {
         } else if args.no_stdlib {
             vec![]
         } else {
-            stdlib_modules(StdLibOptions::Compiled)
-                .compiled_modules
-                .to_vec()
+            diem_framework_releases::current_modules().to_vec()
         }
     };
 

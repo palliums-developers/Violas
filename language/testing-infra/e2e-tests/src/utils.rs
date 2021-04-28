@@ -7,8 +7,9 @@ use crate::{
     compile,
     executor::{self, FakeExecutor},
 };
+use diem_transaction_builder::stdlib as transaction_builder;
+use move_binary_format::file_format::CompiledModule;
 use transaction_builder::*;
-use vm::file_format::CompiledModule;
 
 pub fn close_module_publishing(
     executor: &mut FakeExecutor,
@@ -18,8 +19,8 @@ pub fn close_module_publishing(
     let compiled_script = {
         let script = "
             import 0x1.DiemTransactionPublishingOption;
-        main(config: &signer) {
-            DiemTransactionPublishingOption.set_open_module(move(config), false);
+        main(config: signer) {
+            DiemTransactionPublishingOption.set_open_module(&config, false);
             return;
         }
         ";
@@ -64,8 +65,9 @@ pub fn upgrade_df(
     update_version_number: Option<u64>,
 ) {
     close_module_publishing(executor, dr_account, dr_seqno);
-    for compiled_module_bytes in
-        compiled_stdlib::stdlib_modules(compiled_stdlib::StdLibOptions::Compiled).bytes_vec()
+    for compiled_module_bytes in diem_framework_releases::current_module_blobs()
+        .iter()
+        .cloned()
     {
         let compiled_module_id = CompiledModule::deserialize(&compiled_module_bytes)
             .unwrap()

@@ -1,4 +1,4 @@
-module VerifyLoops {
+module 0x42::VerifyLoops {
     spec module {
         pragma verify=true;
     }
@@ -86,5 +86,146 @@ module VerifyLoops {
     spec fun iter10_abort_incorrect { // Disproved. Abort always happens.
         pragma verify=true;
         aborts_if false;
+    }
+
+    public fun nested_loop_correct(x: u64, y: u64) {
+        loop {
+            loop {
+                if (x <= y) {
+                    break
+                };
+                y = y + 1;
+            };
+
+            if (y <= x) {
+                break
+            };
+            x = x + 1;
+        };
+        spec {
+            assert x == y;
+        };
+    }
+    spec fun nested_loop_correct {
+        aborts_if false;
+    }
+
+    public fun nested_loop_outer_invariant_incorrect(x: u64, y: u64) {
+        spec {
+            assume x != y;
+        };
+        loop {
+            spec {
+                assert x != y;
+            };
+            loop {
+                if (x <= y) {
+                    break
+                };
+                y = y + 1;
+            };
+
+            if (y <= x) {
+                break
+            };
+            x = x + 1;
+        };
+    }
+    spec fun nested_loop_outer_invariant_incorrect {
+        aborts_if false;
+    }
+
+    public fun nested_loop_inner_invariant_incorrect(x: u64, y: u64) {
+        spec {
+            assume x != y;
+        };
+        loop {
+            loop {
+                spec {
+                    assert x != y;
+                };
+                if (x <= y) {
+                    break
+                };
+                y = y + 1;
+            };
+
+            if (y <= x) {
+                break
+            };
+            x = x + 1;
+        };
+    }
+    spec fun nested_loop_inner_invariant_incorrect {
+        aborts_if false;
+    }
+
+    public fun loop_with_two_back_edges_correct(x: u64, y: u64) {
+        loop {
+            if (x > y) {
+                y = y + 1;
+                continue
+            };
+            if (y > x) {
+                x = x + 1;
+                continue
+            };
+            break
+        };
+        spec {
+            assert x == y;
+        };
+    }
+    spec fun loop_with_two_back_edges_correct {
+        aborts_if false;
+    }
+
+    public fun loop_with_two_back_edges_incorrect(x: u64, y: u64) {
+        spec {
+            assume x != y;
+        };
+        loop {
+            spec {
+                assert x != y;
+            };
+            if (x > y) {
+                y = y + 1;
+                continue
+            };
+            if (y > x) {
+                x = x + 1;
+                continue
+            };
+            break
+        };
+    }
+    spec fun loop_with_two_back_edges_incorrect {
+        aborts_if false;
+    }
+
+    public fun loop_invariant_base_invalid(n: u64): u64 {
+        let x = 0;
+        while ({
+            spec {
+                assert x != 0;
+            };
+            (x < n)
+        }) {
+            x = x + 1;
+        };
+        x
+    }
+
+    public fun loop_invariant_induction_invalid(n: u64): u64 {
+        let x = 0;
+        while ({
+            spec {
+                assert x == 0;
+            };
+            (x < n)
+        }) {
+            x = x + 1;
+        };
+        x
     }
 }

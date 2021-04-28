@@ -1,8 +1,7 @@
-FROM debian:buster-20210311@sha256:9d4ab94af82b2567c272c7f47fa1204cd9b40914704213f1c257c44042f82aac AS setup_ci
+FROM debian:buster-20210408@sha256:ba4a437377a0c450ac9bb634c3754a17b1f814ce6fa3157c0dc9eef431b29d1f AS setup_ci
 
 RUN mkdir /diem
 COPY rust-toolchain /diem/rust-toolchain
-COPY cargo-toolchain /diem/cargo-toolchain
 COPY scripts/dev_setup.sh /diem/scripts/dev_setup.sh
 
 #this is the default home on docker images in gha, until it's not?
@@ -21,6 +20,7 @@ RUN mkdir -p /github/home \
 ENV PATH "/opt/cargo/bin:/usr/lib/golang/bin:/github/home/bin:$PATH"
 ENV DOTNET_ROOT "/github/home/.dotnet"
 ENV Z3_EXE "/github/home/bin/z3"
+ENV CVC4_EXE "/github/home/bin/cvc4"
 ENV BOOGIE_EXE "/github/home/.dotnet/tools/boogie"
 
 FROM setup_ci as tested_ci
@@ -45,8 +45,7 @@ RUN [ -x "$(command -v shellcheck)" ] \
     && [ -x "$(command -v go)" ] \
     && [ -x "$(command -v npm)" ] \
     && [ -x "$(command -v "$HOME/.dotnet/tools/boogie")" ] \
-    && [ -x "$(xargs rustup which cargo --toolchain < /diem/rust-toolchain )" ] \
-    && [ -x "$(xargs rustup which cargo --toolchain < /diem/cargo-toolchain)" ]
+    && [ -x "$(xargs rustup which cargo --toolchain < /diem/rust-toolchain )" ]
 
 # should be a no-op
 # sccache builds fine, but is not executable ??? in alpine, ends up being recompiled.  Wierd.

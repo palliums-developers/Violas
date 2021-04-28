@@ -12,15 +12,15 @@ use crate::{
     symbol::{Symbol, SymbolPool},
     ty::Type,
 };
+use move_binary_format::file_format::CodeOffset;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     fmt::{Error, Formatter},
 };
-use vm::file_format::CodeOffset;
 
 use crate::{
-    model::{FunId, GlobalEnv, GlobalId, QualifiedId, SchemaId, TypeParameter},
+    model::{FunId, GlobalEnv, GlobalId, QualifiedInstId, SchemaId, TypeParameter},
     ty::TypeDisplayContext,
 };
 use itertools::Itertools;
@@ -45,8 +45,8 @@ pub struct SpecFunDecl {
     pub params: Vec<(Symbol, Type)>,
     pub context_params: Option<Vec<(Symbol, bool)>>,
     pub result_type: Type,
-    pub used_spec_vars: BTreeSet<QualifiedId<SpecVarId>>,
-    pub used_memory: BTreeSet<QualifiedId<StructId>>,
+    pub used_spec_vars: BTreeSet<QualifiedInstId<SpecVarId>>,
+    pub used_memory: BTreeSet<QualifiedInstId<StructId>>,
     pub uninterpreted: bool,
     pub is_move_fun: bool,
     pub is_native: bool,
@@ -60,6 +60,7 @@ pub struct SpecFunDecl {
 pub enum ConditionKind {
     Assert,
     Assume,
+    Axiom,
     Decreases,
     AbortsIf,
     AbortsWith,
@@ -141,7 +142,7 @@ impl ConditionKind {
     /// Returns true if this condition is allowed on a module.
     pub fn allowed_on_module(&self) -> bool {
         use ConditionKind::*;
-        matches!(self, Invariant | InvariantUpdate)
+        matches!(self, Invariant | InvariantUpdate | Axiom)
     }
 }
 
@@ -151,6 +152,7 @@ impl std::fmt::Display for ConditionKind {
         match self {
             Assert => write!(f, "assert"),
             Assume => write!(f, "assume"),
+            Axiom => write!(f, "axiom"),
             Decreases => write!(f, "decreases"),
             AbortsIf => write!(f, "aborts_if"),
             AbortsWith => write!(f, "aborts_with"),
@@ -287,8 +289,8 @@ pub struct GlobalInvariant {
     pub id: GlobalId,
     pub loc: Loc,
     pub kind: ConditionKind,
-    pub mem_usage: BTreeSet<QualifiedId<StructId>>,
-    pub spec_var_usage: BTreeSet<QualifiedId<SpecVarId>>,
+    pub mem_usage: BTreeSet<QualifiedInstId<StructId>>,
+    pub spec_var_usage: BTreeSet<QualifiedInstId<SpecVarId>>,
     pub declaring_module: ModuleId,
     pub properties: PropertyBag,
     pub cond: Exp,
@@ -505,71 +507,114 @@ impl Exp {
     where
         F: FnMut(Exp) -> (bool, Exp),
     {
+        self.internal_rewrite(rewriter, &mut |id| id)
+    }
+
+    pub fn rewrite_node_id<F>(self, rewriter: &mut F) -> Exp
+    where
+        F: FnMut(NodeId) -> NodeId,
+    {
+        self.internal_rewrite(&mut |e| (false, e), rewriter)
+    }
+
+    fn internal_rewrite<F, G>(self, rewriter: &mut F, node_rewriter: &mut G) -> Exp
+    where
+        F: FnMut(Exp) -> (bool, Exp),
+        G: FnMut(NodeId) -> NodeId,
+    {
         use Exp::*;
         let (is_rewritten, exp) = rewriter(self);
         if is_rewritten {
             return exp;
         }
 
-        let rewrite_vec = |rewriter: &mut F, exps: Vec<Exp>| -> Vec<Exp> {
-            exps.into_iter().map(|e| e.rewrite(rewriter)).collect()
-        };
-        let rewrite_box =
-            |rewriter: &mut F, exp: Box<Exp>| -> Box<Exp> { Box::new(exp.rewrite(rewriter)) };
-        let rewrite_decl = |rewriter: &mut F, d: LocalVarDecl| LocalVarDecl {
-            id: d.id,
-            name: d.name,
-            binding: d.binding.map(|e| e.rewrite(rewriter)),
-        };
-        let rewrite_decls = |rewriter: &mut F, decls: Vec<LocalVarDecl>| -> Vec<LocalVarDecl> {
-            decls
-                .into_iter()
-                .map(|d| rewrite_decl(rewriter, d))
+        let rewrite_vec = |rewriter: &mut F, node_rewriter: &mut G, exps: Vec<Exp>| -> Vec<Exp> {
+            exps.into_iter()
+                .map(|e| e.internal_rewrite(rewriter, node_rewriter))
                 .collect()
         };
-        let rewrite_quant_decls =
-            |rewriter: &mut F, decls: Vec<(LocalVarDecl, Exp)>| -> Vec<(LocalVarDecl, Exp)> {
-                decls
-                    .into_iter()
-                    .map(|(d, r)| (rewrite_decl(rewriter, d), r.rewrite(rewriter)))
-                    .collect()
+        let rewrite_box = |rewriter: &mut F, node_rewriter: &mut G, exp: Box<Exp>| -> Box<Exp> {
+            Box::new(exp.internal_rewrite(rewriter, node_rewriter))
+        };
+        let rewrite_decl =
+            |rewriter: &mut F, node_rewriter: &mut G, d: LocalVarDecl| LocalVarDecl {
+                id: node_rewriter(d.id),
+                name: d.name,
+                binding: d
+                    .binding
+                    .map(|e| e.internal_rewrite(rewriter, node_rewriter)),
             };
+        let rewrite_decls = |rewriter: &mut F,
+                             node_rewriter: &mut G,
+                             decls: Vec<LocalVarDecl>|
+         -> Vec<LocalVarDecl> {
+            decls
+                .into_iter()
+                .map(|d| rewrite_decl(rewriter, node_rewriter, d))
+                .collect()
+        };
+        let rewrite_quant_decls = |rewriter: &mut F,
+                                   node_rewriter: &mut G,
+                                   decls: Vec<(LocalVarDecl, Exp)>|
+         -> Vec<(LocalVarDecl, Exp)> {
+            decls
+                .into_iter()
+                .map(|(d, r)| {
+                    (
+                        rewrite_decl(rewriter, node_rewriter, d),
+                        r.internal_rewrite(rewriter, node_rewriter),
+                    )
+                })
+                .collect()
+        };
 
         match exp {
-            Call(id, oper, args) => Call(id, oper, rewrite_vec(rewriter, args)),
+            LocalVar(id, sym) => LocalVar(node_rewriter(id), sym),
+            Temporary(id, idx) => Temporary(node_rewriter(id), idx),
+            Call(id, oper, args) => Call(
+                node_rewriter(id),
+                oper,
+                rewrite_vec(rewriter, node_rewriter, args),
+            ),
             Invoke(id, target, args) => Invoke(
-                id,
-                rewrite_box(rewriter, target),
-                rewrite_vec(rewriter, args),
+                node_rewriter(id),
+                rewrite_box(rewriter, node_rewriter, target),
+                rewrite_vec(rewriter, node_rewriter, args),
             ),
             Lambda(id, decls, body) => Lambda(
-                id,
-                rewrite_decls(rewriter, decls),
-                rewrite_box(rewriter, body),
+                node_rewriter(id),
+                rewrite_decls(rewriter, node_rewriter, decls),
+                rewrite_box(rewriter, node_rewriter, body),
             ),
             Quant(id, kind, decls, triggers, condition, body) => Quant(
-                id,
+                node_rewriter(id),
                 kind,
-                rewrite_quant_decls(rewriter, decls),
+                rewrite_quant_decls(rewriter, node_rewriter, decls),
                 triggers
                     .into_iter()
-                    .map(|t| t.into_iter().map(|e| e.rewrite(rewriter)).collect())
+                    .map(|t| {
+                        t.into_iter()
+                            .map(|e| e.internal_rewrite(rewriter, node_rewriter))
+                            .collect()
+                    })
                     .collect(),
-                condition.map(|e| rewrite_box(rewriter, e)),
-                rewrite_box(rewriter, body),
+                condition.map(|e| rewrite_box(rewriter, node_rewriter, e)),
+                rewrite_box(rewriter, node_rewriter, body),
             ),
             Block(id, decls, body) => Block(
-                id,
-                rewrite_decls(rewriter, decls),
-                rewrite_box(rewriter, body),
+                node_rewriter(id),
+                rewrite_decls(rewriter, node_rewriter, decls),
+                rewrite_box(rewriter, node_rewriter, body),
             ),
             IfElse(id, c, t, e) => IfElse(
-                id,
-                rewrite_box(rewriter, c),
-                rewrite_box(rewriter, t),
-                rewrite_box(rewriter, e),
+                node_rewriter(id),
+                rewrite_box(rewriter, node_rewriter, c),
+                rewrite_box(rewriter, node_rewriter, t),
+                rewrite_box(rewriter, node_rewriter, e),
             ),
-            _ => exp,
+            Value(id, v) => Value(node_rewriter(id), v),
+            SpecVar(id, mid, vid, label) => SpecVar(node_rewriter(id), mid, vid, label),
+            Invalid(id) => Invalid(node_rewriter(id)),
         }
     }
 
@@ -620,6 +665,7 @@ pub enum Operation {
     And,
     Or,
     Eq,
+    Identical,
     Neq,
     Lt,
     Gt,
@@ -643,6 +689,9 @@ pub enum Operation {
     Single,
     Update,
     Concat,
+    IndexOf,
+    Contains,
+    InRange,
     MaxU8,
     MaxU64,
     MaxU128,

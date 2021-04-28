@@ -10,14 +10,14 @@ module AccountLimits {
 
     /// An operations capability that restricts callers of this module since
     /// the operations can mutate account states.
-    struct AccountLimitMutationCapability has key, store { }
+    struct AccountLimitMutationCapability has store { }
 
     /// A resource specifying the account limits per-currency. There is a default
     /// "unlimited" `LimitsDefinition` resource for accounts published at
     /// `CoreAddresses::DIEM_ROOT_ADDRESS()`, but other accounts may have
     /// different account limit definitons. In such cases, they will have a
     /// `LimitsDefinition` published under their (root) account.
-    struct LimitsDefinition<CoinType> has key, store {
+    struct LimitsDefinition<CoinType> has key {
         /// The maximum inflow allowed during the specified time period.
         max_inflow: u64,
         /// The maximum outflow allowed during the specified time period.
@@ -37,7 +37,7 @@ module AccountLimits {
     /// A struct holding account transaction information for the time window
     /// starting at `window_start` and lasting for the `time_period` specified
     /// in the limits definition at `limit_address`.
-    struct Window<CoinType> has key, store {
+    struct Window<CoinType> has key {
         /// Time window start in microseconds
         window_start: u64,
         /// The inflow during this time window
@@ -545,6 +545,16 @@ module AccountLimits {
                 exists<LimitsDefinition<coin_type>>(global<Window<coin_type>>(window_addr).limit_address);
     }
 
+    /// # Access Control
+
+    spec module {
+        /// Only ParentVASP and ChildVASP can have the account limits [[E1]][ROLE][[E2]][ROLE][[E3]][ROLE][[E4]][ROLE][[E5]][ROLE][[E6]][ROLE][[E7]][ROLE].
+        invariant [global]
+            forall addr: address, coin_type: type where exists<Window<coin_type>>(addr):
+                exists<Roles::RoleId>(addr) &&
+                (global<Roles::RoleId>(addr).role_id == Roles::PARENT_VASP_ROLE_ID ||
+                    global<Roles::RoleId>(addr).role_id == Roles::CHILD_VASP_ROLE_ID);
+    }
 
 }
 }

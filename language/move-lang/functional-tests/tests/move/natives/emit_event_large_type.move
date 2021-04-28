@@ -1,5 +1,5 @@
 
-module M {
+module {{default}}::M {
     use 0x1::Event::{EventHandle, emit_event, new_event_handle};
     use 0x1::Signer::address_of;
 
@@ -78,7 +78,8 @@ module M {
 script {
     use {{default}}::M;
 
-    fun main(s: &signer) {
+    fun main(s: signer) {
+    let s = &s;
         M::event_128(s);
     }
 }
@@ -89,7 +90,8 @@ script {
 script {
     use {{default}}::M;
 
-    fun main(s: &signer) {
+    fun main(s: signer) {
+    let s = &s;
         M::event_256(s);
     }
 }
@@ -100,7 +102,8 @@ script {
 script {
     use {{default}}::M;
 
-    fun main(s: &signer) {
+    fun main(s: signer) {
+    let s = &s;
         M::event_257(s);
     }
 }

@@ -11,6 +11,10 @@ use diem_types::{
     access_path::AccessPath, account_address::AccountAddress, account_state::AccountState,
     contract_event::ContractEvent,
 };
+use move_binary_format::{
+    errors::{Location, PartialVMError, PartialVMResult, VMResult},
+    file_format::{Ability, AbilitySet},
+};
 use move_core_types::{
     identifier::Identifier,
     language_storage::{ModuleId, StructTag, TypeTag},
@@ -21,10 +25,6 @@ use std::{
     collections::btree_map::BTreeMap,
     convert::TryInto,
     fmt::{Display, Formatter},
-};
-use vm::{
-    errors::{Location, PartialVMError, PartialVMResult, VMResult},
-    file_format::{Ability, AbilitySet},
 };
 
 mod fat_type;
@@ -283,10 +283,6 @@ pub struct NullStateView();
 
 impl StateView for NullStateView {
     fn get(&self, _access_path: &AccessPath) -> Result<Option<Vec<u8>>> {
-        Err(anyhow!("No data"))
-    }
-
-    fn multi_get(&self, _access_paths: &[AccessPath]) -> Result<Vec<Option<Vec<u8>>>> {
         Err(anyhow!("No data"))
     }
 

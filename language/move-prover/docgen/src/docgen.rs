@@ -11,8 +11,8 @@ use move_model::{
     code_writer::{CodeWriter, CodeWriterLabel},
     emit, emitln,
     model::{
-        FunId, FunctionEnv, GlobalEnv, Loc, ModuleEnv, ModuleId, NamedConstantEnv, Parameter,
-        QualifiedId, StructEnv, TypeConstraint, TypeParameter,
+        AbilitySet, FunId, FunctionEnv, GlobalEnv, Loc, ModuleEnv, ModuleId, NamedConstantEnv,
+        Parameter, QualifiedId, StructEnv, TypeParameter,
     },
     symbol::Symbol,
     ty::TypeDisplayContext,
@@ -26,7 +26,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs::{self, File},
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     rc::Rc,
 };
@@ -89,6 +89,9 @@ const WEAK_KEYWORDS: &[&str] = &[
     "with",
     "where",
 ];
+
+/// The maximum number of subheadings that are allowed
+const MAX_SUBSECTIONS: usize = 6;
 
 /// Options passed into the documentation generator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -539,9 +542,9 @@ impl<'env> Docgen<'env> {
     }
 
     /// Make path relative to other path.
-    fn path_relative_to(&self, path: &PathBuf, to: &PathBuf) -> PathBuf {
+    fn path_relative_to(&self, path: &Path, to: &Path) -> PathBuf {
         if path.is_absolute() || to.is_absolute() {
-            path.clone()
+            path.to_path_buf()
         } else {
             let mut result = PathBuf::new();
             for _ in to.components() {
@@ -803,7 +806,7 @@ impl<'env> Docgen<'env> {
     }
 
     /// Execute the external tool "dot" with doc_src as input to generate a .svg image file.
-    fn gen_svg_file(&self, out_file_path: &PathBuf, dot_src: &str) {
+    fn gen_svg_file(&self, out_file_path: &Path, dot_src: &str) {
         if let Err(e) = fs::create_dir_all(out_file_path.parent().unwrap()) {
             self.env.error(
                 &self.env.unknown_loc(),
@@ -852,7 +855,6 @@ impl<'env> Docgen<'env> {
                             dot_src
                         ),
                     );
-                    return;
                 }
             }
             Err(e) => {
@@ -977,9 +979,13 @@ impl<'env> Docgen<'env> {
 
     /// Returns "Struct `N`" or "Resource `N`".
     fn struct_title(&self, struct_env: &StructEnv<'_>) -> String {
+        // NOTE(mengxu): although we no longer declare structs with the `resource` keyword, it
+        // might be helpful in keeping `Resource N` in struct title as the boogie translator still
+        // depends on the `is_resource()` predicate to add additional functions to structs declared
+        // with the `key` ability.
         format!(
             "{} `{}`",
-            if struct_env.is_resource() {
+            if struct_env.has_memory() {
                 "Resource"
             } else {
                 "Struct"
@@ -1005,17 +1011,18 @@ impl<'env> Docgen<'env> {
     /// Generates code signature for a struct.
     fn struct_header_display(&self, struct_env: &StructEnv<'_>) -> String {
         let name = self.name_string(struct_env.get_name());
-        let kind = if struct_env.is_resource() {
-            "resource struct"
+        let type_params = self.type_parameter_list_display(&struct_env.get_named_type_parameters());
+        let ability_tokens = self.ability_tokens(struct_env.get_abilities());
+        if ability_tokens.is_empty() {
+            format!("struct {}{}", name, type_params)
         } else {
-            "struct"
-        };
-        format!(
-            "{} {}{}",
-            kind,
-            name,
-            self.type_parameter_list_display(&struct_env.get_named_type_parameters()),
-        )
+            format!(
+                "struct {}{} has {}",
+                name,
+                type_params,
+                ability_tokens.join(", ")
+            )
+        }
     }
 
     fn gen_struct_fields(&self, struct_env: &StructEnv<'_>) {
@@ -1307,6 +1314,24 @@ impl<'env> Docgen<'env> {
         self.env.symbol_pool().string(name)
     }
 
+    /// Collect tokens in an ability set
+    fn ability_tokens(&self, abilities: AbilitySet) -> Vec<&'static str> {
+        let mut ability_tokens = vec![];
+        if abilities.has_copy() {
+            ability_tokens.push("copy");
+        }
+        if abilities.has_drop() {
+            ability_tokens.push("drop");
+        }
+        if abilities.has_store() {
+            ability_tokens.push("store");
+        }
+        if abilities.has_key() {
+            ability_tokens.push("key");
+        }
+        ability_tokens
+    }
+
     /// Creates a type display context for a function.
     fn type_display_context_for_fun(&self, func_env: &FunctionEnv<'_>) -> TypeDisplayContext<'_> {
         let type_param_names = Some(
@@ -1353,6 +1378,9 @@ impl<'env> Docgen<'env> {
     /// Creates a new section header and inserts a table-of-contents entry into the generator.
     fn section_header(&self, s: &str, label: &str) {
         let level = *self.section_nest.borrow();
+        if usize::saturating_add(self.options.section_level_start, level) > MAX_SUBSECTIONS {
+            panic!("Maximum number of subheadings exceeded with heading: {}", s)
+        }
         if !label.is_empty() {
             self.label(label);
             let entry = TocEntry {
@@ -1469,10 +1497,11 @@ impl<'env> Docgen<'env> {
                     // inside inline code section. Eagerly consume/match this '`'
                     let code = chars.take_while_ref(non_code_filter).collect::<String>();
                     // consume the remaining '`'. Report an error if we find an unmatched '`'.
-                    assert!(chars.next() == Some('`'),
-                    format!("Missing backtick found in {} while generating documentation for the following text: \"{}\"",
-                        self.current_module.as_ref().unwrap().get_name().display_full(self.env.symbol_pool()), text,
-                    ));
+                    assert!(
+                                            chars.next() == Some('`'),
+                                            "Missing backtick found in {} while generating documentation for the following text: \"{}\"",
+                                            self.current_module.as_ref().unwrap().get_name().display_full(self.env.symbol_pool()), text,
+                                        );
                     decorated_text += &format!("<code>{}</code>", self.decorate_code(&code));
                 }
             } else {
@@ -1735,15 +1764,12 @@ impl<'env> Docgen<'env> {
 
     /// Display a type parameter.
     fn type_parameter_display(&self, tp: &TypeParameter) -> String {
-        format!(
-            "{}{}",
-            self.name_string(tp.0),
-            match tp.1 {
-                TypeConstraint::None => "",
-                TypeConstraint::Resource => ": resource",
-                TypeConstraint::Copyable => ": copyable",
-            }
-        )
+        let ability_tokens = self.ability_tokens(tp.1 .0);
+        if ability_tokens.is_empty() {
+            self.name_string(tp.0).to_string()
+        } else {
+            format!("{}: {}", self.name_string(tp.0), ability_tokens.join(", "))
+        }
     }
 
     /// Display a type parameter list.

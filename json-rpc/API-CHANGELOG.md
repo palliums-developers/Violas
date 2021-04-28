@@ -13,6 +13,29 @@ Please add the API change in the following format:
 
 ```
 
+## 2021-04-21 Add `bytes` field to `unknown` event
+
+When the event data can't be parsed, we output `unknown` type event data with raw BCS event data bytes, so that client can unwrap event details by parsing the BCS bytes.
+
+## 2021-03-25 Add `metadata` field to preburns in the `preburn_queues` for designated dealers
+
+This adds an additional `metadata` field coupled with each preburn request held
+in the `preburn_queues` for a designated dealer. This also adds a new `PreburnWithMetadataView`.
+
+## 2021-03-25 Add `arguments_bcs` in `ScriptView` for hex-encoded BCS bytes
+
+The `ScriptFunction` transaction payload accepts BCS-encoded bytes as arguments
+while the traditional `Script` payload type still accepts arguments wrapped in
+`TransactionArgument`. To differentiate them in `ScriptView` returned to users,
+a `arguments_bcs` field is added which will display HEX-encoded BCS bytes for
+the `ScriptFunction` payload while the arguments in the `Script` payload is
+still displayed through `arguments`.
+
+## 2021-03-18 Add optional parameter `version` to `get_account` method
+
+- Get account data by version.
+- A new field `version` is added to [Account](docs/type_account.md) in the `get_account` method response.
+
 ## 2021-03-16 Add support for script functions in `TransactionDataView` and `ScriptView`
 
 Update `ScriptView` to support script functions. This adds three new nullable

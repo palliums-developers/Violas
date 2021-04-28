@@ -23,9 +23,10 @@ tokio = { version = "1.3.0", features = ["full"] }
 warp = { version = "0.3.0", features = ["tls"] }
 reqwest = { version = "0.11.2", features = ["blocking", "json"], default_features = false, optional = true }
 proptest = { version = "1.0.0", optional = true }
+regex = { version = "1.4.3", default-features = false, features = ["std", "perf"] }
 
 bcs = "0.1.2"
-compiled-stdlib = { path = "../language/diem-framework/compiled" }
+diem-framework-releases= { path = "../language/diem-framework/releases" }
 diem-config = { path = "../config" }
 diem-crypto = { path = "../crypto/crypto" }
 diemdb = { path = "../storage/diemdb", optional = true }
@@ -34,7 +35,6 @@ diem-logger = { path = "../common/logger" }
 diem-mempool = { path = "../mempool" }
 diem-metrics = { path = "../common/metrics" }
 diem-proptest-helpers = { path = "../common/proptest-helpers", optional = true }
-diem-trace = { path = "../common/trace" }
 diem-types = { path = "../types" }
 diem-temppath = { path = "../common/temppath", optional = true }
 diem-workspace-hack = { path = "../common/workspace-hack" }
@@ -57,13 +57,13 @@ diem-proptest-helpers = { path = "../common/proptest-helpers" }
 diem-temppath = { path = "../common/temppath" }
 diem-types = { path = "../types", features = ["fuzzing"] }
 vm-validator = { path = "../vm-validator" }
-compiled-stdlib = { path = "../language/diem-framework/compiled" }
+diem-framework-releases= { path = "../language/diem-framework/releases" }
 vm-genesis = { path = "../language/tools/vm-genesis" }
 executor = { path = "../execution/executor" }
 executor-types = { path = "../execution/executor-types" }
 scratchpad = { path = "../storage/scratchpad" }
 move-vm-types = { path = "../language/move-vm/types" }
-diem-transaction-builder = { path = "../client/transaction-builder" }
+diem-transaction-builder = { path = "../sdk/transaction-builder" }
 diem-node = { path = "../diem-node" }
 
 [features]

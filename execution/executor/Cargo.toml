@@ -26,7 +26,6 @@ diem-metrics = { path = "../../common/metrics" }
 diem-infallible = { path = "../../common/infallible" }
 diem-secure-net = { path = "../../secure/net" }
 diem-state-view = { path = "../../storage/state-view" }
-diem-trace = { path = "../../common/trace" }
 diem-types = { path = "../../types" }
 move-core-types = { path = "../../language/move-core/types" }
 diem-vm = { path = "../../language/diem-vm" }
@@ -40,7 +39,7 @@ proptest = { version = "1.0.0", optional = true }
 proptest = "1.0.0"
 rand = "0.8.3"
 
-compiled-stdlib = { path = "../../language/diem-framework/compiled" }
+diem-framework-releases = { path = "../../language/diem-framework/releases" }
 compiler = { path = "../../language/compiler" }
 executor-test-helpers = { path = "../executor-test-helpers" }
 diem-config = { path = "../../config" }
@@ -48,7 +47,7 @@ diem-genesis-tool = {path = "../../config/management/genesis", features = ["test
 diem-temppath = { path = "../../common/temppath" }
 diemdb = { path = "../../storage/diemdb" }
 storage-interface = { path = "../../storage/storage-interface", features=["fuzzing"] }
-transaction-builder = { path = "../../language/transaction-builder" }
+diem-transaction-builder = { path = "../../sdk/transaction-builder" }
 vm-genesis = { path = "../../language/tools/vm-genesis" }
 
 [features]

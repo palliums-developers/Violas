@@ -4,16 +4,7 @@
 use std::collections::HashMap;
 
 use crate::{data_cache::RemoteCache, logging::NoContextLog, move_vm::MoveVM};
-use move_core_types::{
-    account_address::AccountAddress,
-    gas_schedule::{GasAlgebra, GasUnits},
-    identifier::{IdentStr, Identifier},
-    language_storage::{ModuleId, StructTag, TypeTag},
-    value::{serialize_values, MoveValue},
-    vm_status::{StatusCode, StatusType},
-};
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
-use vm::{
+use move_binary_format::{
     errors::{PartialVMResult, VMResult},
     file_format::{
         empty_module, AbilitySet, AddressIdentifierIndex, Bytecode, CodeUnit, CompiledModuleMut,
@@ -24,6 +15,14 @@ use vm::{
     },
     CompiledModule,
 };
+use move_core_types::{
+    account_address::AccountAddress,
+    identifier::{IdentStr, Identifier},
+    language_storage::{ModuleId, StructTag, TypeTag},
+    value::{serialize_values, MoveValue},
+    vm_status::{StatusCode, StatusType},
+};
+use move_vm_types::gas_schedule::GasStatus;
 
 // make a script with a given signature for main.
 fn make_script(parameters: Signature) -> Vec<u8> {
@@ -41,6 +40,7 @@ fn make_script(parameters: Signature) -> Vec<u8> {
         }
     };
     CompiledScriptMut {
+        version: move_binary_format::file_format_common::VERSION_MAX,
         module_handles: vec![],
         struct_handles: vec![],
         function_handles: vec![],
@@ -85,6 +85,7 @@ fn make_script_with_non_linking_structs(parameters: Signature) -> Vec<u8> {
         }
     };
     CompiledScriptMut {
+        version: move_binary_format::file_format_common::VERSION_MAX,
         module_handles: vec![ModuleHandle {
             address: AddressIdentifierIndex(0),
             name: IdentifierIndex(0),
@@ -154,6 +155,7 @@ fn make_module_with_function(
         }
     };
     let module = CompiledModuleMut {
+        version: move_binary_format::file_format_common::VERSION_MAX,
         self_module_handle_idx: ModuleHandleIndex(0),
         module_handles: vec![ModuleHandle {
             address: AddressIdentifierIndex(0),
@@ -259,14 +261,13 @@ fn call_script_with_args_ty_args_signers(
     let remote_view = RemoteStore::new();
     let log_context = NoContextLog::new();
     let mut session = move_vm.new_session(&remote_view);
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
     session.execute_script(
         script,
         ty_args,
         args,
         signers,
-        &mut cost_strategy,
+        &mut gas_status,
         &log_context,
     )
 }
@@ -288,15 +289,14 @@ fn call_script_function_with_args_ty_args_signers(
     remote_view.add_module(module);
     let log_context = NoContextLog::new();
     let mut session = move_vm.new_session(&remote_view);
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
     session.execute_script_function(
         &id,
         function_name.as_ident_str(),
         ty_args,
         args,
         signers,
-        &mut cost_strategy,
+        &mut gas_status,
         &log_context,
     )?;
     Ok(())
@@ -349,17 +349,16 @@ fn bad_signatures() -> Vec<Signature> {
         Signature(vec![SignatureToken::Reference(Box::new(
             SignatureToken::U64,
         ))]),
-        // `Signer` in signature (not `&Signer`)
-        Signature(vec![SignatureToken::Signer]),
+        // `&Signer` in signature (not `Signer`)
+        Signature(vec![SignatureToken::Reference(Box::new(
+            SignatureToken::Signer,
+        ))]),
         // vector of `Signer` in signature
         Signature(vec![SignatureToken::Vector(Box::new(
             SignatureToken::Signer,
         ))]),
         // `Signer` ref not first arg
-        Signature(vec![
-            SignatureToken::Bool,
-            SignatureToken::Reference(Box::new(SignatureToken::Signer)),
-        ]),
+        Signature(vec![SignatureToken::Bool, SignatureToken::Signer]),
     ]
 }
 
@@ -526,30 +525,21 @@ fn general_cases() -> Vec<(
     vec![
         // too few signers (0)
         (
-            Signature(vec![
-                SignatureToken::Reference(Box::new(SignatureToken::Signer)),
-                SignatureToken::Reference(Box::new(SignatureToken::Signer)),
-            ]),
+            Signature(vec![SignatureToken::Signer, SignatureToken::Signer]),
             vec![],
             vec![],
             Some(StatusCode::NUMBER_OF_SIGNER_ARGUMENTS_MISMATCH),
         ),
         // too few signers (1)
         (
-            Signature(vec![
-                SignatureToken::Reference(Box::new(SignatureToken::Signer)),
-                SignatureToken::Reference(Box::new(SignatureToken::Signer)),
-            ]),
+            Signature(vec![SignatureToken::Signer, SignatureToken::Signer]),
             vec![],
             vec![AccountAddress::random()],
             Some(StatusCode::NUMBER_OF_SIGNER_ARGUMENTS_MISMATCH),
         ),
         // too few signers (3)
         (
-            Signature(vec![
-                SignatureToken::Reference(Box::new(SignatureToken::Signer)),
-                SignatureToken::Reference(Box::new(SignatureToken::Signer)),
-            ]),
+            Signature(vec![SignatureToken::Signer, SignatureToken::Signer]),
             vec![],
             vec![
                 AccountAddress::random(),
@@ -560,10 +550,7 @@ fn general_cases() -> Vec<(
         ),
         // correct number of signers (2)
         (
-            Signature(vec![
-                SignatureToken::Reference(Box::new(SignatureToken::Signer)),
-                SignatureToken::Reference(Box::new(SignatureToken::Signer)),
-            ]),
+            Signature(vec![SignatureToken::Signer, SignatureToken::Signer]),
             vec![],
             vec![AccountAddress::random(), AccountAddress::random()],
             None,
@@ -575,10 +562,10 @@ fn general_cases() -> Vec<(
             vec![AccountAddress::random()],
             None,
         ),
-        // signer ref
+        // signer
         (
             Signature(vec![
-                SignatureToken::Reference(Box::new(SignatureToken::Signer)),
+                SignatureToken::Signer,
                 SignatureToken::Bool,
                 SignatureToken::Address,
             ]),
@@ -776,8 +763,7 @@ fn call_missing_item() {
     let mut remote_view = RemoteStore::new();
     let log_context = NoContextLog::new();
     let mut session = move_vm.new_session(&remote_view);
-    let cost_table = zero_cost_schedule();
-    let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(0));
+    let mut gas_status = GasStatus::new_unmetered();
     let error = session
         .execute_script_function(
             id,
@@ -785,7 +771,7 @@ fn call_missing_item() {
             vec![],
             vec![],
             vec![],
-            &mut cost_strategy,
+            &mut gas_status,
             &log_context,
         )
         .err()
@@ -803,7 +789,7 @@ fn call_missing_item() {
             vec![],
             vec![],
             vec![],
-            &mut cost_strategy,
+            &mut gas_status,
             &log_context,
         )
         .err()

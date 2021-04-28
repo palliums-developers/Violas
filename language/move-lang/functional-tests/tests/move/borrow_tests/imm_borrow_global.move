@@ -3,7 +3,7 @@
 
 //! sender: alice
 
-module A {
+module {{alice}}::A {
     struct Coin has store { u: u64 }
 
     public fun new(): Coin {
@@ -26,7 +26,7 @@ module A {
 //! new-transaction
 //! sender: bob
 
-module Tester {
+module {{bob}}::Tester {
     use {{alice}}::A;
     use 0x1::Signer;
 
@@ -50,7 +50,8 @@ module Tester {
 script {
 use {{bob}}::Tester;
 
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     Tester::test(account);
 }
 }

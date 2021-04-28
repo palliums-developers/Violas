@@ -20,12 +20,12 @@ module DiemConfig {
     /// Event that signals DiemBFT algorithm to start a new epoch,
     /// with new configuration information. This is also called a
     /// "reconfiguration event"
-    struct NewEpochEvent has copy, drop, store {
+    struct NewEpochEvent has drop, store {
         epoch: u64,
     }
 
     /// Holds information about state of reconfiguration
-    struct Configuration has key, store {
+    struct Configuration has key {
         /// Epoch number
         epoch: u64,
         /// Time of last reconfiguration. Only changes on reconfiguration events.
@@ -38,7 +38,7 @@ module DiemConfig {
     struct ModifyConfigCapability<TypeName> has key, store {}
 
     /// Reconfiguration disabled if this resource occurs under LibraRoot.
-    struct DisableReconfiguration has key, store {}
+    struct DisableReconfiguration has key {}
 
     /// The `Configuration` resource is in an invalid state
     const ECONFIGURATION: u64 = 0;
@@ -212,7 +212,6 @@ module DiemConfig {
         dr_account: &signer,
         payload: Config,
     ): ModifyConfigCapability<Config> {
-        DiemTimestamp::assert_genesis();
         Roles::assert_diem_root(dr_account);
         assert(
             !exists<DiemConfig<Config>>(Signer::address_of(dr_account)),
@@ -226,7 +225,6 @@ module DiemConfig {
         /// generic type/specific invariant issue
         pragma opaque, verify = false;
         modifies global<DiemConfig<Config>>(CoreAddresses::DIEM_ROOT_ADDRESS());
-        include DiemTimestamp::AbortsIfNotGenesis;
         include Roles::AbortsIfNotDiemRoot{account: dr_account};
         include AbortsIfPublished<Config>;
         include SetEnsures<Config>;
@@ -258,7 +256,6 @@ module DiemConfig {
     }
     spec schema PublishNewConfigAbortsIf<Config> {
         dr_account: signer;
-        include DiemTimestamp::AbortsIfNotGenesis;
         include Roles::AbortsIfNotDiemRoot{account: dr_account};
         aborts_if spec_is_published<Config>();
         aborts_if exists<ModifyConfigCapability<Config>>(Signer::spec_address_of(dr_account));

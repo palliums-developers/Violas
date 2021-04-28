@@ -38,8 +38,9 @@ diem-types = { path = "../../types" }
 diem-temppath = { path = "../../common/temppath/" }
 diem-workspace-hack = { path = "../../common/workspace-hack" }
 resource-viewer = { path = "../../language/tools/resource-viewer" }
-compiled-stdlib = { path = "../../language/diem-framework/compiled" }
-transaction-builder = { path = "../../language/transaction-builder" }
+diem-framework = { path = "../../language/diem-framework" }
+diem-framework-releases = { path = "../../language/diem-framework/releases" }
+diem-transaction-builder = { path = "../../sdk/transaction-builder" }
 compiler = { path = "../../language/compiler" }
 
 [dev-dependencies]

@@ -21,7 +21,7 @@ module Diem {
     /// of the coin (in the base units of the currency `CoinType`
     /// and specified in the `CurrencyInfo` resource for that `CoinType`
     /// published under the `CoreAddresses::CURRENCY_INFO_ADDRESS()` account address).
-    struct Diem<CoinType> has key, store {
+    struct Diem<CoinType> has store {
         /// The value of this coin in the base units for `CoinType`
         value: u64
     }
@@ -41,7 +41,7 @@ module Diem {
     /// minted) along with the `currency_code` for the coin(s) being
     /// minted, and that is defined in the `currency_code` field of the
     /// `CurrencyInfo` resource for the currency.
-    struct MintEvent has copy, drop, store {
+    struct MintEvent has drop, store {
         /// Funds added to the system
         amount: u64,
         /// ASCII encoded symbol for the coin type (e.g., "XDX")
@@ -55,7 +55,7 @@ module Diem {
     /// (and as defined in the `CurrencyInfo` resource for that currency).
     /// It also contains the `preburn_address` from which the coin is
     /// extracted for burning.
-    struct BurnEvent has copy, drop, store {
+    struct BurnEvent has drop, store {
         /// Funds removed from the system
         amount: u64,
         /// ASCII encoded symbol for the coin type (e.g., "XDX")
@@ -67,7 +67,7 @@ module Diem {
     /// A `PreburnEvent` is emitted every time an `amount` of funds with
     /// a coin type `currency_code` is enqueued in the `PreburnQueue` resource under
     /// the account at the address `preburn_address`.
-    struct PreburnEvent has copy, drop, store {
+    struct PreburnEvent has drop, store {
         /// The amount of funds waiting to be removed (burned) from the system
         amount: u64,
         /// ASCII encoded symbol for the coin type (e.g., "XDX")
@@ -80,7 +80,7 @@ module Diem {
     /// resource held in a `PreburnQueue` at `preburn_address` is canceled (removed from the
     /// preburn queue, but not burned). The currency of the funds is given by the
     /// `currency_code` as defined in the `CurrencyInfo` for that currency.
-    struct CancelBurnEvent has copy, drop, store {
+    struct CancelBurnEvent has drop, store {
         /// The amount of funds returned
         amount: u64,
         /// ASCII encoded symbol for the coin type (e.g., "XDX")
@@ -91,7 +91,7 @@ module Diem {
 
     /// An `ToXDXExchangeRateUpdateEvent` is emitted every time the to-XDX exchange
     /// rate for the currency given by `currency_code` is updated.
-    struct ToXDXExchangeRateUpdateEvent has copy, drop, store {
+    struct ToXDXExchangeRateUpdateEvent has drop, store {
         /// The currency code of the currency whose exchange rate was updated.
         currency_code: vector<u8>,
         /// The new on-chain to-XDX exchange rate between the
@@ -108,7 +108,7 @@ module Diem {
     /// the time of registration, the `MintCapability<CoinType>` and
     /// `BurnCapability<CoinType>` capabilities are returned to the caller.
     /// Unless they are specified otherwise the fields in this resource are immutable.
-    struct CurrencyInfo<CoinType> has key, store {
+    struct CurrencyInfo<CoinType> has key {
         /// The total value for the currency represented by `CoinType`. Mutable.
         total_value: u128,
         /// Value of funds that are in the process of being burned.  Mutable.
@@ -173,6 +173,13 @@ module Diem {
         to_burn: Diem<CoinType>,
     }
 
+    /// A preburn request, along with (an opaque to Move) metadata that is
+    /// associated with the preburn request.
+    struct PreburnWithMetadata<CoinType> has store {
+        preburn: Preburn<CoinType>,
+        metadata: vector<u8>,
+    }
+
     /// A queue of preburn requests. This is a FIFO queue whose elements
     /// are indexed by the value held within each preburn resource in the
     /// `preburns` field. When burning or cancelling a burn of a given
@@ -184,9 +191,9 @@ module Diem {
     /// This resource can be created by either the TreasuryCompliance
     /// account, or during the upgrade process, by a designated dealer with an
     /// existing `Preburn` resource in `CoinType`
-    struct PreburnQueue<CoinType> has key, store {
+    struct PreburnQueue<CoinType> has key {
         /// The queue of preburn requests
-        preburns: vector<Preburn<CoinType>>,
+        preburns: vector<PreburnWithMetadata<CoinType>>,
     }
 
     spec struct PreburnQueue {
@@ -195,7 +202,7 @@ module Diem {
         /// No preburn request can have a zero value.
         /// The `value` field of any coin in a `Preburn` resource
         /// within this field must be nonzero.
-        invariant forall i in 0..len(preburns): preburns[i].to_burn.value > 0;
+        invariant forall i in 0..len(preburns): preburns[i].preburn.to_burn.value > 0;
     }
 
     /// Maximum u64 value.
@@ -512,8 +519,8 @@ module Diem {
     spec schema PreburnEnsures<CoinType> {
         amount: u64;
         preburn: Preburn<CoinType>;
-        ensures spec_currency_info<CoinType>().preburn_value
-                    == old(spec_currency_info<CoinType>().preburn_value) + amount;
+        let info = spec_currency_info<CoinType>();
+        ensures info == update_field(old(info), preburn_value, old(info.preburn_value) + amount);
     }
     spec schema PreburnWithResourceEmits<CoinType> {
         amount: u64;
@@ -655,7 +662,10 @@ module Diem {
             // If the DD has an old preburn balance, this is converted over
             // into the new preburn queue when it's upgraded.
             if (to_burn.value > 0)  {
-                add_preburn_to_queue(account, Preburn { to_burn })
+                add_preburn_to_queue(account, PreburnWithMetadata {
+                    preburn: Preburn { to_burn },
+                    metadata: x"",
+                })
             } else {
                 destroy_zero(to_burn)
             };
@@ -693,14 +703,14 @@ module Diem {
             preburn_queue_exists: preburn_queue_exists,
             account_addr: account_addr,
             preburn_queue: preburn_queue,
-            preburn: preburn,
+            preburn: PreburnWithMetadata { preburn, metadata: x"" },
         };
     }
     spec schema UpgradePreburnEnsuresFullState<CoinType> {
         preburn_queue_exists: bool;
         account_addr: address;
         preburn_queue: PreburnQueue<CoinType>;
-        preburn: Preburn<CoinType>;
+        preburn: PreburnWithMetadata<CoinType>;
         ensures preburn_queue_exists;
         ensures !exists<Preburn<CoinType>>(account_addr);
         ensures Vector::length(preburn_queue.preburns) == 1;
@@ -709,11 +719,11 @@ module Diem {
 
     /// Add the `preburn` request to the preburn queue of `account`, and check that the
     /// number of preburn requests does not exceed `MAX_OUTSTANDING_PREBURNS`.
-    fun add_preburn_to_queue<CoinType: store>(account: &signer, preburn: Preburn<CoinType>)
+    fun add_preburn_to_queue<CoinType: store>(account: &signer, preburn: PreburnWithMetadata<CoinType>)
     acquires PreburnQueue {
         let account_addr = Signer::address_of(account);
         assert(exists<PreburnQueue<CoinType>>(account_addr), Errors::invalid_state(EPREBURN_QUEUE));
-        assert(value(&preburn.to_burn) > 0, Errors::invalid_argument(EPREBURN));
+        assert(value(&preburn.preburn.to_burn) > 0, Errors::invalid_argument(EPREBURN));
         let preburns = &mut borrow_global_mut<PreburnQueue<CoinType>>(account_addr).preburns;
         assert(
             Vector::length(preburns) < MAX_OUTSTANDING_PREBURNS,
@@ -733,9 +743,9 @@ module Diem {
     }
     spec schema AddPreburnToQueueAbortsIf<CoinType> {
         account: signer;
-        preburn: Preburn<CoinType>;
+        preburn: PreburnWithMetadata<CoinType>;
         let account_addr = Signer::spec_address_of(account);
-        aborts_if preburn.to_burn.value == 0 with Errors::INVALID_ARGUMENT;
+        aborts_if preburn.preburn.to_burn.value == 0 with Errors::INVALID_ARGUMENT;
         aborts_if exists<PreburnQueue<CoinType>>(account_addr) &&
             Vector::length(global<PreburnQueue<CoinType>>(account_addr).preburns) >= MAX_OUTSTANDING_PREBURNS
             with Errors::LIMIT_EXCEEDED;
@@ -760,10 +770,11 @@ module Diem {
         // for the same currency.
         upgrade_preburn<CoinType>(account);
 
-        let preburn = Preburn {
-            to_burn: zero<CoinType>(),
+        let preburn = PreburnWithMetadata {
+            preburn: Preburn { to_burn: zero<CoinType>() },
+            metadata: x"",
         };
-        preburn_with_resource(coin, &mut preburn, sender);
+        preburn_with_resource(coin, &mut preburn.preburn, sender);
         add_preburn_to_queue(account, preburn);
     }
     spec fun preburn_to {
@@ -783,7 +794,7 @@ module Diem {
         include Roles::AbortsIfNotDesignatedDealer;
         include PreburnAbortsIf<CoinType>;
         include UpgradePreburnAbortsIf<CoinType>;
-        include AddPreburnToQueueAbortsIf<CoinType>{preburn: spec_make_preburn(amount)};
+        include AddPreburnToQueueAbortsIf<CoinType>{preburn: PreburnWithMetadata{ preburn: spec_make_preburn(amount), metadata: x"" } };
     }
     spec schema PreburnToEnsures<CoinType> {
         account: signer;
@@ -804,7 +815,7 @@ module Diem {
     /// Calls to this function will fail if:
     /// * `preburn_address` doesn't have a `PreburnQueue<CoinType>` resource published under it; or
     /// * a preburn request with the correct value for `amount` cannot be found in the preburn queue for `preburn_address`;
-    fun remove_preburn_from_queue<CoinType: store>(preburn_address: address, amount: u64): Preburn<CoinType>
+    fun remove_preburn_from_queue<CoinType: store>(preburn_address: address, amount: u64): PreburnWithMetadata<CoinType>
     acquires PreburnQueue {
         assert(exists<PreburnQueue<CoinType>>(preburn_address), Errors::not_published(EPREBURN_QUEUE));
         // We search from the head of the queue
@@ -815,12 +826,12 @@ module Diem {
         while ({
             spec {
                 assert index <= queue_length;
-                assert forall j in 0..index: preburn_queue[j].to_burn.value != amount;
+                assert forall j in 0..index: preburn_queue[j].preburn.to_burn.value != amount;
             };
             (index < queue_length)
-            }) {
+        }) {
             let elem = Vector::borrow(preburn_queue, index);
-            if (value(&elem.to_burn) == amount) {
+            if (value(&elem.preburn.to_burn) == amount) {
                 let preburn = Vector::remove(preburn_queue, index);
                 // Make sure that the value is correct
                 return preburn
@@ -830,28 +841,25 @@ module Diem {
 
         spec {
             assert index == queue_length;
-            assert forall j in 0..queue_length: preburn_queue[j] != spec_make_preburn(amount);
+            assert forall j in 0..queue_length: preburn_queue[j].preburn.to_burn.value != amount;
         };
 
         // If we didn't return already, we couldn't find a preburn with a matching value.
         abort Errors::invalid_state(EPREBURN_NOT_FOUND)
     }
     spec fun remove_preburn_from_queue {
-        // TODO: re-enable once loop invariants are implemented
-        pragma verify = false;
         pragma opaque;
         modifies global<PreburnQueue<CoinType>>(preburn_address);
         include RemovePreburnFromQueueAbortsIf<CoinType>;
         include RemovePreburnFromQueueEnsures<CoinType>;
-        ensures result.to_burn.value == amount;
+        ensures result.preburn.to_burn.value == amount;
     }
     spec schema RemovePreburnFromQueueAbortsIf<CoinType> {
         preburn_address: address;
         amount: u64;
         let preburn_queue = global<PreburnQueue<CoinType>>(preburn_address).preburns;
-        let preburn = Preburn { to_burn: Diem { value: amount }};
         aborts_if !exists<PreburnQueue<CoinType>>(preburn_address) with Errors::NOT_PUBLISHED;
-        aborts_if !Vector::spec_contains(preburn_queue, preburn) with Errors::INVALID_STATE;
+        aborts_if forall i in 0..len(preburn_queue): preburn_queue[i].preburn.to_burn.value != amount with Errors::INVALID_STATE;
     }
     /// > TODO: See this cannot currently be expressed in the MSL.
     /// > See https://github.com/diem/diem/issues/7615 for more information.
@@ -880,7 +888,7 @@ module Diem {
     ) acquires CurrencyInfo, PreburnQueue {
 
         // Remove the preburn request
-        let preburn = remove_preburn_from_queue<CoinType>(preburn_address, amount);
+        let PreburnWithMetadata{ preburn, metadata: _ } = remove_preburn_from_queue<CoinType>(preburn_address, amount);
 
         // Burn the contained coins
         burn_with_resource_cap(&mut preburn, preburn_address, capability);
@@ -990,7 +998,7 @@ module Diem {
     ): Diem<CoinType> acquires CurrencyInfo, PreburnQueue {
 
         // destroy the coin in the preburn area
-        let Preburn { to_burn } = remove_preburn_from_queue<CoinType>(preburn_address, amount);
+        let PreburnWithMetadata{ preburn: Preburn { to_burn }, metadata: _ } = remove_preburn_from_queue<CoinType>(preburn_address, amount);
 
         // update the market cap
         let currency_code = currency_code<CoinType>();

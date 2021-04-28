@@ -32,7 +32,7 @@ module DiemAccount {
     use 0x1::Roles;
 
     /// An `address` is a Diem Account iff it has a published DiemAccount resource.
-    struct DiemAccount has key, store {
+    struct DiemAccount has key {
         /// The current authentication key.
         /// This can be different from the key used to create the account
         authentication_key: vector<u8>,
@@ -62,7 +62,7 @@ module DiemAccount {
 
     /// A resource that holds the total value of currency of type `Token`
     /// currently held by the account.
-    struct Balance<Token> has key, store {
+    struct Balance<Token> has key {
         /// Stores the value of the balance in its balance field. A coin has
         /// a `value` field. The amount of money in the balance is changed
         /// by modifying this field.
@@ -72,7 +72,7 @@ module DiemAccount {
     /// The holder of WithdrawCapability for account_address can withdraw Diem from
     /// account_address/DiemAccount/balance.
     /// There is at most one WithdrawCapability in existence for a given address.
-    struct WithdrawCapability has key, store {
+    struct WithdrawCapability has store {
         /// Address that WithdrawCapability was associated with when it was created.
         /// This field does not change.
         account_address: address,
@@ -81,7 +81,7 @@ module DiemAccount {
     /// The holder of KeyRotationCapability for account_address can rotate the authentication key for
     /// account_address (i.e., write to account_address/DiemAccount/authentication_key).
     /// There is at most one KeyRotationCapability in existence for a given address.
-    struct KeyRotationCapability has key, store {
+    struct KeyRotationCapability has store {
         /// Address that KeyRotationCapability was associated with when it was created.
         /// This field does not change.
         account_address: address,
@@ -89,19 +89,19 @@ module DiemAccount {
 
     /// A wrapper around an `AccountLimitMutationCapability` which is used to check for account limits
     /// and to record freeze/unfreeze events.
-    struct AccountOperationsCapability has key, store {
+    struct AccountOperationsCapability has key {
         limits_cap: AccountLimitMutationCapability,
         creation_events: Event::EventHandle<CreateAccountEvent>,
     }
 
     /// A resource that holds the event handle for all the past WriteSet transactions that have been committed on chain.
-    struct DiemWriteSetManager has key, store {
+    struct DiemWriteSetManager has key {
         upgrade_events: Event::EventHandle<Self::AdminTransactionEvent>,
     }
 
 
     /// Message for sent events
-    struct SentPaymentEvent has copy, drop, store {
+    struct SentPaymentEvent has drop, store {
         /// The amount of Diem<Token> sent
         amount: u64,
         /// The code symbol for the currency that was sent
@@ -113,7 +113,7 @@ module DiemAccount {
     }
 
     /// Message for received events
-    struct ReceivedPaymentEvent has copy, drop, store {
+    struct ReceivedPaymentEvent has drop, store {
         /// The amount of Diem<Token> received
         amount: u64,
         /// The code symbol for the currency that was received
@@ -125,13 +125,13 @@ module DiemAccount {
     }
 
     /// Message for committed WriteSet transaction.
-    struct AdminTransactionEvent has copy, drop, store {
+    struct AdminTransactionEvent has drop, store {
         // The block time when this WriteSet is committed.
         committed_timestamp_secs: u64,
     }
 
     /// Message for creation of a new account
-    struct CreateAccountEvent has copy, drop, store {
+    struct CreateAccountEvent has drop, store {
         /// Address of the created account
         created: address,
         /// Role of the created account
@@ -345,6 +345,10 @@ module DiemAccount {
             == old(global<DiemAccount>(payee).withdraw_capability);
         ensures global<DiemAccount>(payee).authentication_key
             == old(global<DiemAccount>(payee).authentication_key);
+        ensures Event::spec_guid_eq(global<DiemAccount>(payee).sent_events,
+                                    old(global<DiemAccount>(payee).sent_events));
+        ensures Event::spec_guid_eq(global<DiemAccount>(payee).received_events,
+                                    old(global<DiemAccount>(payee).received_events));
         let amount = to_deposit.value;
         include DepositAbortsIf<Token>{amount: amount};
         include DepositOverflowAbortsIf<Token>{amount: amount};
@@ -430,12 +434,12 @@ module DiemAccount {
         modifies global<DesignatedDealer::Dealer>(designated_dealer_address);
         modifies global<DesignatedDealer::TierInfo<Token>>(designated_dealer_address);
         modifies global<Balance<Token>>(designated_dealer_address);
-        modifies global<AccountLimits::Window>(VASP::spec_parent_address(designated_dealer_address));
+        modifies global<AccountLimits::Window<Token>>(VASP::spec_parent_address(designated_dealer_address));
         modifies global<Diem::CurrencyInfo<Token>>(CoreAddresses::CURRENCY_INFO_ADDRESS());
         include TieredMintAbortsIf<Token>;
         include TieredMintEnsures<Token>;
+        include TieredMintEmits<Token>;
     }
-
     spec schema TieredMintAbortsIf<Token> {
         tc_account: signer;
         designated_dealer_address: address;
@@ -446,7 +450,6 @@ module DiemAccount {
             payee: designated_dealer_address, amount: mint_amount, metadata: x"", metadata_signature: x""};
         include DepositOverflowAbortsIf<Token>{payee: designated_dealer_address, amount: mint_amount};
     }
-
     spec schema TieredMintEnsures<Token> {
         designated_dealer_address: address;
         mint_amount: u64;
@@ -456,6 +459,18 @@ module DiemAccount {
         ensures currency_info == update_field(old(currency_info), total_value, old(currency_info.total_value) + mint_amount);
         /// The balance of designated dealer increases by `amount`.
         ensures dealer_balance == old(dealer_balance) + mint_amount;
+    }
+    spec schema TieredMintEmits<Token> {
+        tc_account: signer;
+        designated_dealer_address: address;
+        mint_amount: u64;
+        tier_index: u64;
+        include DepositEmits<Token>{
+            payer: CoreAddresses::VM_RESERVED_ADDRESS(),
+            payee: designated_dealer_address,
+            amount: mint_amount,
+            metadata: x""
+        };
     }
 
     // Cancel the burn request from `preburn_address` and return the funds.
@@ -590,10 +605,14 @@ module DiemAccount {
         let payer = cap.account_address;
         modifies global<Balance<Token>>(payer);
         modifies global<DiemAccount>(payer);
-        modifies global<AccountLimits::Window>(VASP::spec_parent_address(payer));
+        modifies global<AccountLimits::Window<Token>>(VASP::spec_parent_address(payer));
         ensures exists<DiemAccount>(payer);
         ensures global<DiemAccount>(payer).withdraw_capability
                     == old(global<DiemAccount>(payer).withdraw_capability);
+        ensures Event::spec_guid_eq(global<DiemAccount>(payer).sent_events,
+                                    old(global<DiemAccount>(payer).sent_events));
+        ensures Event::spec_guid_eq(global<DiemAccount>(payer).received_events,
+                                    old(global<DiemAccount>(payer).received_events));
         include WithdrawFromAbortsIf<Token>;
         include WithdrawFromBalanceEnsures<Token>{balance: global<Balance<Token>>(payer)};
         include WithdrawOnlyFromCapAddress<Token>;
@@ -613,7 +632,7 @@ module DiemAccount {
     /// # Access Control
     spec schema WithdrawOnlyFromCapAddress<Token> {
         cap: WithdrawCapability;
-        /// Can only withdraw from the balances of cap.account_address [[H18]][PERMISSION].
+        /// Can only withdraw from the balances of cap.account_address [[H19]][PERMISSION].
         ensures forall addr: address where old(exists<Balance<Token>>(addr)) && addr != cap.account_address:
             balance<Token>(addr) == old(balance<Token>(addr));
     }
@@ -647,13 +666,22 @@ module DiemAccount {
         pragma opaque;
         let dd_addr = Signer::spec_address_of(dd);
         let payer = cap.account_address;
-        modifies global<AccountLimits::Window>(VASP::spec_parent_address(payer));
+        modifies global<AccountLimits::Window<Token>>(VASP::spec_parent_address(payer));
         modifies global<DiemAccount>(payer);
         ensures exists<DiemAccount>(payer);
         ensures global<DiemAccount>(payer).withdraw_capability
                 == old(global<DiemAccount>(payer).withdraw_capability);
+        ensures Event::spec_guid_eq(global<DiemAccount>(payer).sent_events,
+                                    old(global<DiemAccount>(payer).sent_events));
+        ensures Event::spec_guid_eq(global<DiemAccount>(payer).received_events,
+                                    old(global<DiemAccount>(payer).received_events));
+        ensures Event::spec_guid_eq(global<DiemAccount>(dd_addr).sent_events,
+                                    old(global<DiemAccount>(dd_addr).sent_events));
+        ensures Event::spec_guid_eq(global<DiemAccount>(dd_addr).received_events,
+                                    old(global<DiemAccount>(dd_addr).received_events));
         include PreburnAbortsIf<Token>;
         include PreburnEnsures<Token>{dd, payer};
+        include PreburnEmits<Token>;
     }
     spec schema PreburnAbortsIf<Token> {
         dd: signer;
@@ -673,6 +701,14 @@ module DiemAccount {
         ensures payer_balance == old(payer_balance) - amount;
         /// The value of preburn at `dd_addr` increases by `amount`;
         include Diem::PreburnToEnsures<Token>{amount, account: dd};
+    }
+    spec schema PreburnEmits<Token> {
+        dd: signer;
+        cap: WithdrawCapability;
+        amount: u64;
+        let dd_addr = Signer::spec_address_of(dd);
+        include Diem::PreburnWithResourceEmits<Token>{preburn_address: dd_addr};
+        include WithdrawFromEmits<Token>{payee: dd_addr, metadata: x""};
     }
 
     /// Return a unique capability granting permission to withdraw from the sender's account balance.
@@ -726,6 +762,8 @@ module DiemAccount {
         pragma opaque;
         let cap_addr = cap.account_address;
         modifies global<DiemAccount>(cap_addr);
+        ensures global<DiemAccount>(cap_addr) == update_field(old(global<DiemAccount>(cap_addr)),
+            withdraw_capability, Option::spec_some(cap));
         aborts_if !exists_at(cap_addr) with Errors::NOT_PUBLISHED;
         aborts_if !delegated_withdraw_capability(cap_addr) with Errors::INVALID_STATE;
         ensures spec_holds_own_withdraw_cap(cap_addr);
@@ -758,23 +796,32 @@ module DiemAccount {
         modifies global<DiemAccount>(payee);
         modifies global<Balance<Token>>(payer);
         modifies global<Balance<Token>>(payee);
-        modifies global<AccountLimits::Window>(VASP::spec_parent_address(payer));
-        modifies global<AccountLimits::Window>(VASP::spec_parent_address(payee));
+        modifies global<AccountLimits::Window<Token>>(VASP::spec_parent_address(payer));
+        modifies global<AccountLimits::Window<Token>>(VASP::spec_parent_address(payee));
         ensures exists_at(payer);
         ensures exists_at(payee);
         ensures exists<Balance<Token>>(payer);
         ensures exists<Balance<Token>>(payee);
-        ensures global<DiemAccount>(payer).withdraw_capability ==
-            old(global<DiemAccount>(payer).withdraw_capability);
+        ensures global<DiemAccount>(payer).withdraw_capability
+            == old(global<DiemAccount>(payer).withdraw_capability);
+        ensures Event::spec_guid_eq(global<DiemAccount>(payer).sent_events,
+                                    old(global<DiemAccount>(payer).sent_events));
+        ensures Event::spec_guid_eq(global<DiemAccount>(payer).received_events,
+                                    old(global<DiemAccount>(payer).received_events));
+        ensures Event::spec_guid_eq(global<DiemAccount>(payee).sent_events,
+                                    old(global<DiemAccount>(payee).sent_events));
+        ensures Event::spec_guid_eq(global<DiemAccount>(payee).received_events,
+                                    old(global<DiemAccount>(payee).received_events));
         include PayFromAbortsIf<Token>;
         include PayFromEnsures<Token>{payer};
+        include PayFromEmits<Token>;
     }
     spec schema PayFromAbortsIf<Token> {
         cap: WithdrawCapability;
         payee: address;
         amount: u64;
         metadata: vector<u8>;
-        metadata_signature: vector<u8> ;
+        metadata_signature: vector<u8>;
         include DepositAbortsIf<Token>{payer: cap.account_address};
         include cap.account_address != payee ==> DepositOverflowAbortsIf<Token>;
         include WithdrawFromAbortsIf<Token>;
@@ -797,6 +844,15 @@ module DiemAccount {
         ensures payer == payee ==> balance<Token>(payer) == old(balance<Token>(payer));
         ensures payer != payee ==> balance<Token>(payer) == old(balance<Token>(payer)) - amount;
         ensures payer != payee ==> balance<Token>(payee) == old(balance<Token>(payee)) + amount;
+    }
+    spec schema PayFromEmits<Token> {
+        cap: WithdrawCapability;
+        payee: address;
+        amount: u64;
+        metadata: vector<u8>;
+        let payer = cap.account_address;
+        include DepositEmits<Token>{payer: payer};
+        include WithdrawFromEmits<Token>;
     }
 
     /// Rotate the authentication key for the account under cap.account_address
@@ -833,7 +889,7 @@ module DiemAccount {
     /// # Access Control
     spec schema RotateOnlyKeyOfCapAddress {
         cap: KeyRotationCapability;
-        /// Can only rotate the authentication_key of cap.account_address [[H17]][PERMISSION].
+        /// Can only rotate the authentication_key of cap.account_address [[H18]][PERMISSION].
         ensures forall addr: address where addr != cap.account_address && old(exists_at(addr)):
             global<DiemAccount>(addr).authentication_key == old(global<DiemAccount>(addr).authentication_key);
     }
@@ -993,7 +1049,6 @@ module DiemAccount {
                 sequence_number: 0,
             }
         );
-        destroy_signer(new_account);
     }
     spec fun make_account {
         pragma opaque;
@@ -1363,7 +1418,6 @@ module DiemAccount {
     ///////////////////////////////////////////////////////////////////////////
 
     native fun create_signer(addr: address): signer;
-    native fun destroy_signer(sig: signer);
 
     /// Helper to return the u64 value of the `balance` for `account`
     fun balance_for<Token: store>(balance: &Balance<Token>): u64 {
@@ -1481,7 +1535,7 @@ module DiemAccount {
 
     /// The prologue for module transaction
     fun module_prologue<Token: store>(
-        sender: &signer,
+        sender: signer,
         txn_sequence_number: u64,
         txn_public_key: vector<u8>,
         txn_gas_price: u64,
@@ -1490,12 +1544,12 @@ module DiemAccount {
         chain_id: u8,
     ) acquires DiemAccount, Balance {
         assert(
-            DiemTransactionPublishingOption::is_module_allowed(sender),
+            DiemTransactionPublishingOption::is_module_allowed(&sender),
             Errors::invalid_state(PROLOGUE_EMODULE_NOT_ALLOWED),
         );
 
         prologue_common<Token>(
-            sender,
+            &sender,
             txn_sequence_number,
             txn_public_key,
             txn_gas_price,
@@ -1537,7 +1591,7 @@ module DiemAccount {
 
     /// The prologue for script transaction
     fun script_prologue<Token: store>(
-        sender: &signer,
+        sender: signer,
         txn_sequence_number: u64,
         txn_public_key: vector<u8>,
         txn_gas_price: u64,
@@ -1547,12 +1601,12 @@ module DiemAccount {
         script_hash: vector<u8>,
     ) acquires DiemAccount, Balance {
         assert(
-            DiemTransactionPublishingOption::is_script_allowed(sender, &script_hash),
+            DiemTransactionPublishingOption::is_script_allowed(&sender, &script_hash),
             Errors::invalid_state(PROLOGUE_ESCRIPT_NOT_ALLOWED),
         );
 
         prologue_common<Token>(
-            sender,
+            &sender,
             txn_sequence_number,
             txn_public_key,
             txn_gas_price,
@@ -1588,21 +1642,21 @@ module DiemAccount {
 
     /// The prologue for WriteSet transaction
     fun writeset_prologue(
-        sender: &signer,
+        sender: signer,
         txn_sequence_number: u64,
         txn_public_key: vector<u8>,
         txn_expiration_time: u64,
         chain_id: u8,
     ) acquires DiemAccount, Balance {
         assert(
-            Signer::address_of(sender) == CoreAddresses::DIEM_ROOT_ADDRESS(),
+            Signer::address_of(&sender) == CoreAddresses::DIEM_ROOT_ADDRESS(),
             Errors::invalid_argument(PROLOGUE_EINVALID_WRITESET_SENDER)
         );
-        assert(Roles::has_diem_root_role(sender), Errors::invalid_argument(PROLOGUE_EINVALID_WRITESET_SENDER));
+        assert(Roles::has_diem_root_role(&sender), Errors::invalid_argument(PROLOGUE_EINVALID_WRITESET_SENDER));
 
         // Currency code don't matter here as it won't be charged anyway. Gas constants are ommitted.
         prologue_common<XUS>(
-            sender,
+            &sender,
             txn_sequence_number,
             txn_public_key,
             0,
@@ -1776,6 +1830,22 @@ module DiemAccount {
     /// If the exection of the epilogue fails, it is re-invoked with different arguments, and
     /// based on the conditions checked in the prologue, should never fail.
     fun epilogue<Token: store>(
+        account: signer,
+        txn_sequence_number: u64,
+        txn_gas_price: u64,
+        txn_max_gas_units: u64,
+        gas_units_remaining: u64
+    ) acquires DiemAccount, Balance {
+        epilogue_common<Token>(
+            &account,
+            txn_sequence_number,
+            txn_gas_price,
+            txn_max_gas_units,
+            gas_units_remaining,
+        )
+    }
+
+    fun epilogue_common<Token: store>(
         account: &signer,
         txn_sequence_number: u64,
         txn_gas_price: u64,
@@ -1839,10 +1909,11 @@ module DiemAccount {
 
     /// Epilogue for WriteSet trasnaction
     fun writeset_epilogue(
-        dr_account: &signer,
+        dr_account: signer,
         txn_sequence_number: u64,
         should_trigger_reconfiguration: bool,
     ) acquires DiemWriteSetManager, DiemAccount, Balance {
+        let dr_account = &dr_account;
         let writeset_events_ref = borrow_global_mut<DiemWriteSetManager>(CoreAddresses::DIEM_ROOT_ADDRESS());
         Event::emit_event<AdminTransactionEvent>(
             &mut writeset_events_ref.upgrade_events,
@@ -1857,7 +1928,7 @@ module DiemAccount {
         assert(Roles::has_diem_root_role(dr_account), Errors::invalid_argument(PROLOGUE_EINVALID_WRITESET_SENDER));
 
         // Currency code don't matter here as it won't be charged anyway.
-        epilogue<XUS>(dr_account, txn_sequence_number, 0, 0, 0);
+        epilogue_common<XUS>(dr_account, txn_sequence_number, 0, 0, 0);
         if (should_trigger_reconfiguration) DiemConfig::reconfigure(dr_account)
     }
     spec fun writeset_epilogue {
@@ -1889,6 +1960,7 @@ module DiemAccount {
     spec fun create_validator_account {
         include CreateValidatorAccountAbortsIf;
         include CreateValidatorAccountEnsures;
+        include MakeAccountEmits;
     }
 
     spec schema CreateValidatorAccountAbortsIf {
@@ -1955,18 +2027,18 @@ module DiemAccount {
 
     /// ## Key Rotation Capability
     spec module {
-        /// the permission "RotateAuthenticationKey(addr)" is granted to the account at addr [[H17]][PERMISSION].
+        /// the permission "RotateAuthenticationKey(addr)" is granted to the account at addr [[H18]][PERMISSION].
         /// When an account is created, its KeyRotationCapability is granted to the account.
         apply EnsuresHasKeyRotationCap{account: new_account} to make_account;
 
-        /// Only `make_account` creates KeyRotationCap [[H17]][PERMISSION][[I17]][PERMISSION]. `create_*_account` only calls
+        /// Only `make_account` creates KeyRotationCap [[H18]][PERMISSION][[I18]][PERMISSION]. `create_*_account` only calls
         /// `make_account`, and does not pack KeyRotationCap by itself.
         /// `restore_key_rotation_capability` restores KeyRotationCap, and does not create new one.
         apply PreserveKeyRotationCapAbsence to * except make_account, create_*_account,
               restore_key_rotation_capability, initialize;
 
         /// Every account holds either no key rotation capability (because KeyRotationCapability has been delegated)
-        /// or the key rotation capability for addr itself [[H17]][PERMISSION].
+        /// or the key rotation capability for addr itself [[H18]][PERMISSION].
         invariant [global] forall addr: address where exists_at(addr):
             delegated_key_rotation_capability(addr) || spec_holds_own_key_rotation_cap(addr);
     }
@@ -1985,18 +2057,18 @@ module DiemAccount {
 
     /// ## Withdraw Capability
     spec module {
-        /// the permission "WithdrawCapability(addr)" is granted to the account at addr [[H18]][PERMISSION].
+        /// the permission "WithdrawCapability(addr)" is granted to the account at addr [[H19]][PERMISSION].
         /// When an account is created, its WithdrawCapability is granted to the account.
         apply EnsuresWithdrawCap{account: new_account} to make_account;
 
-        /// Only `make_account` creates WithdrawCap [[H18]][PERMISSION][[I18]][PERMISSION]. `create_*_account` only calls
+        /// Only `make_account` creates WithdrawCap [[H19]][PERMISSION][[I19]][PERMISSION]. `create_*_account` only calls
         /// `make_account`, and does not pack KeyRotationCap by itself.
         /// `restore_withdraw_capability` restores WithdrawCap, and does not create new one.
         apply PreserveWithdrawCapAbsence to * except make_account, create_*_account,
                 restore_withdraw_capability, initialize;
 
         /// Every account holds either no withdraw capability (because withdraw cap has been delegated)
-        /// or the withdraw capability for addr itself [[H18]][PERMISSION].
+        /// or the withdraw capability for addr itself [[H19]][PERMISSION].
         invariant [global] forall addr: address where exists_at(addr):
             spec_holds_delegated_withdraw_capability(addr) || spec_holds_own_withdraw_cap(addr);
     }
@@ -2016,7 +2088,7 @@ module DiemAccount {
     /// ## Authentication Key
 
     spec module {
-        /// only `Self::rotate_authentication_key` can rotate authentication_key [[H17]][PERMISSION].
+        /// only `Self::rotate_authentication_key` can rotate authentication_key [[H18]][PERMISSION].
         apply AuthenticationKeyRemainsSame to *, *<T> except rotate_authentication_key;
     }
 
@@ -2028,10 +2100,10 @@ module DiemAccount {
     /// ## Balance
 
     spec module {
-        /// only `Self::withdraw_from` and its helper and clients can withdraw [[H18]][PERMISSION].
+        /// only `Self::withdraw_from` and its helper and clients can withdraw [[H19]][PERMISSION].
         apply BalanceNotDecrease<Token> to *<Token>
             except withdraw_from, withdraw_from_balance, staple_xdx, unstaple_xdx,
-                preburn, pay_from, epilogue, failure_epilogue, success_epilogue;
+                preburn, pay_from, epilogue_common, epilogue, failure_epilogue, success_epilogue;
     }
 
     spec schema BalanceNotDecrease<Token> {

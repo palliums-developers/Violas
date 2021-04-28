@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    errors::Errors,
     expansion::ast::{AbilitySet, Fields, Value_},
     hlir::ast::{self as H, Block},
     naming::ast as N,
@@ -53,8 +52,8 @@ pub fn display_var(s: &str) -> DisplayVar {
 // Context
 //**************************************************************************************************
 
-struct Context {
-    errors: Errors,
+struct Context<'env> {
+    env: &'env mut CompilationEnv,
     structs: UniqueMap<StructName, UniqueMap<Field, usize>>,
     function_locals: UniqueMap<Var, H::SingleType>,
     local_scope: UniqueMap<Var, Var>,
@@ -62,29 +61,16 @@ struct Context {
     signature: Option<H::FunctionSignature>,
 }
 
-impl Context {
-    pub fn new(errors: Errors) -> Self {
+impl<'env> Context<'env> {
+    pub fn new(env: &'env mut CompilationEnv) -> Self {
         Context {
-            errors,
+            env,
             structs: UniqueMap::new(),
             function_locals: UniqueMap::new(),
             local_scope: UniqueMap::new(),
             used_locals: BTreeSet::new(),
             signature: None,
         }
-    }
-
-    pub fn error(&mut self, e: Vec<(Loc, impl Into<String>)>) {
-        self.errors
-            .push(e.into_iter().map(|(loc, msg)| (loc, msg.into())).collect())
-    }
-
-    pub fn get_errors(self) -> Errors {
-        self.errors
-    }
-
-    pub fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
     }
 
     pub fn has_empty_locals(&self) -> bool {
@@ -151,10 +137,11 @@ impl Context {
 //**************************************************************************************************
 
 pub fn program(
+    compilation_env: &mut CompilationEnv,
     _pre_compiled_lib: Option<&FullyCompiledProgram>,
     prog: T::Program,
-) -> (H::Program, Errors) {
-    let mut context = Context::new(vec![]);
+) -> H::Program {
+    let mut context = Context::new(compilation_env);
     let T::Program {
         modules: tmodules,
         scripts: tscripts,
@@ -162,7 +149,7 @@ pub fn program(
     let modules = modules(&mut context, tmodules);
     let scripts = scripts(&mut context, tscripts);
 
-    (H::Program { modules, scripts }, context.get_errors())
+    H::Program { modules, scripts }
 }
 
 fn modules(
@@ -181,6 +168,7 @@ fn module(
     mdef: T::ModuleDefinition,
 ) -> (ModuleIdent, H::ModuleDefinition) {
     let T::ModuleDefinition {
+        attributes,
         is_source_module,
         dependency_order,
         friends,
@@ -199,6 +187,7 @@ fn module(
     (
         module_ident,
         H::ModuleDefinition {
+            attributes,
             is_source_module,
             dependency_order,
             friends,
@@ -221,6 +210,7 @@ fn scripts(
 
 fn script(context: &mut Context, tscript: T::Script) -> H::Script {
     let T::Script {
+        attributes,
         loc,
         constants: tconstants,
         function_name,
@@ -229,6 +219,8 @@ fn script(context: &mut Context, tscript: T::Script) -> H::Script {
     let constants = tconstants.map(|name, c| constant(context, name, c));
     let function = function(context, function_name.clone(), tfunction);
     H::Script {
+        attributes,
+
         loc,
         constants,
         function_name,
@@ -242,11 +234,13 @@ fn script(context: &mut Context, tscript: T::Script) -> H::Script {
 
 fn function(context: &mut Context, _name: FunctionName, f: T::Function) -> H::Function {
     assert!(context.has_empty_locals());
+    let attributes = f.attributes;
     let visibility = f.visibility;
     let signature = function_signature(context, f.signature);
     let acquires = f.acquires;
     let body = function_body(context, &signature, f.body);
     H::Function {
+        attributes,
         visibility,
         signature,
         acquires,
@@ -331,6 +325,7 @@ fn function_body_defined(
 
 fn constant(context: &mut Context, _name: ConstantName, cdef: T::Constant) -> H::Constant {
     let T::Constant {
+        attributes,
         loc,
         signature: tsignature,
         value: tvalue,
@@ -349,6 +344,7 @@ fn constant(context: &mut Context, _name: ConstantName, cdef: T::Constant) -> H:
     };
     let (locals, body) = function_body_defined(context, &function_signature, eloc, tseq);
     H::Constant {
+        attributes,
         loc,
         signature,
         value: (locals, body),
@@ -364,10 +360,12 @@ fn struct_def(
     _name: StructName,
     sdef: N::StructDefinition,
 ) -> H::StructDefinition {
+    let attributes = sdef.attributes;
     let abilities = sdef.abilities;
     let type_parameters = sdef.type_parameters;
     let fields = struct_fields(context, sdef.fields);
     H::StructDefinition {
+        attributes,
         abilities,
         type_parameters,
         fields,
@@ -734,18 +732,18 @@ fn exp(
     Box::new(exp_(context, result, expected_type_opt, te))
 }
 
-fn exp_(
-    context: &mut Context,
+fn exp_<'env>(
+    context: &mut Context<'env>,
     result: &mut Block,
     initial_expected_type_opt: Option<&H::Type>,
     initial_e: T::Exp,
 ) -> H::Exp {
     use std::{cell::RefCell, rc::Rc};
 
-    struct Stack<'a> {
+    struct Stack<'a, 'env> {
         frames: Vec<Box<dyn FnOnce(&mut Self)>>,
         operands: Vec<H::Exp>,
-        context: &'a mut Context,
+        context: &'a mut Context<'env>,
     }
 
     macro_rules! inner {
@@ -1229,7 +1227,7 @@ fn exp_impl(
             HE::Spec(u, used_locals)
         }
         TE::UnresolvedError => {
-            assert!(context.has_errors());
+            assert!(context.env.has_errors());
             HE::UnresolvedError
         }
 
@@ -1674,7 +1672,7 @@ fn check_trailing_unit(context: &mut Context, block: &mut Block) {
             let unreachable_msg = "Any code after this expression will not be reached";
             let info_msg = "A trailing ';' in an expression block implicitly adds a '()' value \
                         after the semicolon. That '()' value will not be reachable";
-            $context.error(vec![
+            $context.env.add_error(vec![
                 ($uloc, semi_msg),
                 ($loc, unreachable_msg),
                 ($uloc, info_msg),
@@ -1801,7 +1799,7 @@ fn check_unused_locals(
         errors.push((loc, msg));
     }
     for error in errors {
-        context.error(vec![error]);
+        context.env.add_error(vec![error]);
     }
     for v in &unused {
         locals.remove(v);

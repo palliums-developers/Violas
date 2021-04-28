@@ -7,7 +7,7 @@ use anyhow::anyhow;
 
 use std::{collections::BTreeMap, fs, option::Option::None};
 
-use codespan::{ByteIndex, ColumnIndex, FileId, LineIndex, Location, Span};
+use codespan::{ByteIndex, ColumnIndex, LineIndex, Location, Span};
 use codespan_reporting::diagnostic::{Diagnostic, Label, Severity};
 use itertools::Itertools;
 use log::{debug, info, warn};
@@ -24,15 +24,15 @@ use move_model::{
 use crate::prover_task_runner::{ProverTaskRunner, RunBoogieWithSeeds};
 // DEBUG
 // use backtrace::Backtrace;
-use crate::options::BoogieOptions;
+use crate::options::{BoogieOptions, VectorTheory};
 use bytecode::function_target_pipeline::{FunctionTargetsHolder, FunctionVariant};
+use move_binary_format::file_format::FunctionDefinitionIndex;
 use move_model::{
     ast::TempIndex,
     model::{NodeId, QualifiedId},
 };
 use once_cell::sync::Lazy;
 use std::num::ParseIntError;
-use vm::file_format::FunctionDefinitionIndex;
 
 /// A type alias for the way how we use crate `pretty`'s document type. `pretty` is a
 /// Wadler-style pretty printer. Our simple usage doesn't require any lifetime management.
@@ -47,7 +47,6 @@ pub struct BoogieWrapper<'env> {
     pub targets: &'env FunctionTargetsHolder,
     pub writer: &'env CodeWriter,
     pub options: &'env BoogieOptions,
-    pub boogie_file_id: FileId,
 }
 
 /// Output of a boogie run.
@@ -65,6 +64,7 @@ pub enum BoogieErrorKind {
     Assertion,
     Inconclusive,
     Inconsistency,
+    Internal,
 }
 
 impl BoogieErrorKind {
@@ -89,6 +89,7 @@ pub enum TraceEntry {
     Temporary(QualifiedId<FunId>, TempIndex, ModelValue),
     Result(QualifiedId<FunId>, usize, ModelValue),
     Abort(QualifiedId<FunId>, ModelValue),
+    Exp(NodeId, ModelValue),
 }
 
 impl<'env> BoogieWrapper<'env> {
@@ -136,11 +137,37 @@ impl<'env> BoogieWrapper<'env> {
                 }
                 debug!("analyzing boogie output");
                 let out = String::from_utf8_lossy(&output.stdout).to_string();
+                // Boogie prints a few ad-hoc error messages (with exit code 0!), so we have
+                // no chance to catch an error until we recognize one of those patterns.
+                if out
+                    .trim()
+                    .starts_with("Fatal Error: ProverException: Cannot find specified prover")
+                {
+                    return Err(anyhow!(
+                        "The configured prover `{}` could not be found{}",
+                        if self.options.use_cvc4 {
+                            &self.options.cvc4_exe
+                        } else {
+                            &self.options.z3_exe
+                        },
+                        if self.options.use_cvc4 {
+                            " (--use-cvc4 is set)"
+                        } else {
+                            ""
+                        }
+                    ));
+                }
                 // Boogie output contains the string "errors detected in" whenever parsing,
                 // resolution, or type checking errors are discovered.
                 if out.contains("errors detected in") {
                     return Err(anyhow!(
                         "[internal] boogie exited with compilation errors:\n{}",
+                        out
+                    ));
+                }
+                if out.contains("Prover error:") {
+                    return Err(anyhow!(
+                        "[internal] boogie exited with prover errors:\n{}",
                         out
                     ));
                 }
@@ -205,8 +232,9 @@ impl<'env> BoogieWrapper<'env> {
                     }
                     Temporary(fun, idx, value) if error.model.is_some() => {
                         let fun_env = self.env.get_function(*fun);
-                        let fun_target =
-                            self.targets.get_target(&fun_env, FunctionVariant::Baseline);
+                        let fun_target = self
+                            .targets
+                            .get_target(&fun_env, &FunctionVariant::Baseline);
                         if *idx < fun_target.get_local_count() {
                             let var_name = fun_target
                                 .get_local_name(*idx)
@@ -232,12 +260,13 @@ impl<'env> BoogieWrapper<'env> {
                     }
                     Result(fun, idx, value) if error.model.is_some() => {
                         let fun_env = self.env.get_function(*fun);
-                        let fun_target =
-                            self.targets.get_target(&fun_env, FunctionVariant::Baseline);
+                        let fun_target = self
+                            .targets
+                            .get_target(&fun_env, &FunctionVariant::Baseline);
                         let n = fun_target.get_return_count();
                         if *idx < n {
                             let var_name = if n > 1 {
-                                format!("result_{}", idx)
+                                format!("result_{}", idx.saturating_add(1))
                             } else {
                                 "result".to_string()
                             };
@@ -267,12 +296,36 @@ impl<'env> BoogieWrapper<'env> {
                         // Do not continue after first abort
                         break;
                     }
+                    Exp(node_id, value) => {
+                        let ty = self.env.get_node_type(*node_id);
+                        let exp_str = self.get_abbreviated_source(*node_id);
+                        display.extend(self.make_trace_entry(
+                            exp_str,
+                            value.pretty_or_raw(self, error.model.as_ref().unwrap(), &ty),
+                        ));
+                    }
                     _ => {}
                 }
             }
             diag = diag.with_notes(display);
         }
         self.env.add_diag(diag);
+    }
+
+    fn get_abbreviated_source(&self, node_id: NodeId) -> String {
+        let loc = self.env.get_node_loc(node_id);
+        let res = if let Ok(src) = self.env.get_source(&loc) {
+            let src = src.lines().map(|s| s.trim()).join(" ");
+            let l = src.len();
+            if l > 70 {
+                format!("{} ..", &src[0..67])
+            } else {
+                src
+            }
+        } else {
+            loc.display(self.env).to_string()
+        };
+        format!("`{}`", res)
     }
 
     fn make_trace_entry(&self, var_name: String, value: PrettyDoc) -> Vec<String> {
@@ -296,19 +349,45 @@ impl<'env> BoogieWrapper<'env> {
 
     /// Extracts verification errors from Boogie output.
     fn extract_verification_errors(&self, out: &str) -> Vec<BoogieError> {
+        // Need to add any diag which is not processed by this function (like
+        // inconclusive) to this list so its not reported as unexpected boogie
+        // output.
+        const OTHER_DIAG_START: &[&str] = &[
+            "inconclusive",
+            "out of resource",
+            "timed out",
+            "inconsistency_detected",
+        ];
         static VERIFICATION_DIAG_STARTS: Lazy<Regex> = Lazy::new(|| {
             Regex::new(r"(?m)^assert_failed\((?P<args>[^)]*)\): (?P<msg>.*)$").unwrap()
         });
         let mut errors = vec![];
         let mut at = 0;
         while let Some(cap) = VERIFICATION_DIAG_STARTS.captures(&out[at..]) {
+            let inbetween = out[at..at + cap.get(0).unwrap().start()].trim();
             at = usize::saturating_add(at, cap.get(0).unwrap().end());
+
             let msg = cap.name("msg").unwrap().as_str();
             if msg == "expected to fail" {
                 // Masks the failure from the negative test for the inconsistency checking
                 // which is expected to fail, and skips the error report of this instance.
                 continue;
             }
+
+            if !inbetween.is_empty() && !OTHER_DIAG_START.iter().any(|s| inbetween.starts_with(s)) {
+                // This is unexpected text and we report it as an internal error
+                errors.push(BoogieError {
+                    kind: BoogieErrorKind::Internal,
+                    loc: self.env.unknown_loc(),
+                    message: format!(
+                        "unexpected boogie output: `{} ..`",
+                        &inbetween[0..inbetween.len().min(70)]
+                    ),
+                    execution_trace: vec![],
+                    model: None,
+                })
+            }
+
             let args = cap.name("args").unwrap().as_str();
             let loc = self.report_error(self.extract_loc(args), self.env.unknown_loc());
             let execution_trace = self.extract_augmented_trace(out, &mut at);
@@ -343,10 +422,7 @@ impl<'env> BoogieWrapper<'env> {
 
         if let Some(cap) = MODEL_REGION.captures(&out[*at..]) {
             *at = usize::saturating_add(*at, cap.get(0).unwrap().end());
-            match model
-                .parse(self, cap.name("mod").unwrap().as_str())
-                .and_then(|_| model.derive(self))
-            {
+            match model.parse(self, cap.name("mod").unwrap().as_str()) {
                 Ok(_) => {}
                 Err(parse_error) => {
                     let context_module = self
@@ -420,11 +496,23 @@ impl<'env> BoogieWrapper<'env> {
                 let value = self.extract_value(value)?;
                 Ok(TraceEntry::Abort(fun, value))
             }
+            "track_exp" => {
+                let node_id = self.extract_node_id(args)?;
+                let value = self.extract_value(value)?;
+                Ok(TraceEntry::Exp(node_id, value))
+            }
             _ => Err(ModelParseError::new(&format!(
                 "unrecognized augmented trace entry `{}`",
                 name
             ))),
         }
+    }
+
+    fn extract_node_id(&self, args: &str) -> Result<NodeId, ModelParseError> {
+        let index = args.parse::<usize>()?;
+        self.env
+            .index_to_node_id(index)
+            .ok_or_else(|| ModelParseError::new("undefined node id"))
     }
 
     fn extract_loc(&self, args: &str) -> Result<Loc, ModelParseError> {
@@ -575,8 +663,7 @@ pub enum ValueArrayRep {
 #[derive(Debug)]
 pub struct Model {
     vars: BTreeMap<ModelValue, ModelValue>,
-    tracked_exps: BTreeMap<ExpDescriptor, Vec<ModelValue>>,
-    value_array_rep: ValueArrayRep,
+    vector_theory: VectorTheory,
 }
 
 impl Model {
@@ -584,12 +671,7 @@ impl Model {
     fn new(wrapper: &BoogieWrapper<'_>) -> Self {
         Model {
             vars: Default::default(),
-            tracked_exps: Default::default(),
-            value_array_rep: if wrapper.options.vector_using_sequences {
-                ValueArrayRep::ValueArrayIsSeq
-            } else {
-                ValueArrayRep::ValueArrayIsMap
-            },
+            vector_theory: wrapper.options.vector_theory,
         }
     }
 
@@ -613,46 +695,6 @@ impl Model {
                 }
                 _ => Err(ModelParseError("expected ModelValue::Map".to_string())),
             })
-    }
-
-    /// Derive information from the model.
-    fn derive(&mut self, wrapper: &BoogieWrapper<'_>) -> Result<(), ModelParseError> {
-        // Extract the tracked expressions. (No boogie attribute/other support for this.)
-        let track_exp_map = self
-            .vars
-            .get(&ModelValue::literal("$DebugTrackExp"))
-            .and_then(|x| x.extract_map())
-            .ok_or_else(invalid_track_info)?;
-        for k in track_exp_map.keys() {
-            if k == &ModelValue::literal("else") {
-                continue;
-            }
-            let (desc, value) = Self::extract_debug_exp(wrapper, k)?;
-            self.tracked_exps
-                .entry(desc)
-                .or_insert_with(Vec::new)
-                .push(value);
-        }
-        Ok(())
-    }
-
-    /// Extract and validate a tracked expression from $DebugTrackExp map.
-    fn extract_debug_exp(
-        wrapper: &BoogieWrapper<'_>,
-        map_entry: &ModelValue,
-    ) -> Result<(ExpDescriptor, ModelValue), ModelParseError> {
-        if let ModelValue::List(args) = map_entry {
-            if args.len() != 2 {
-                return Err(invalid_track_info());
-            }
-            let node_id = NodeId::new(args[0].extract_number().ok_or_else(invalid_track_info)?);
-            if wrapper.env.get_node_type(node_id) == Type::Error {
-                return Err(invalid_track_info());
-            }
-            Ok((ExpDescriptor { node_id }, args[1].clone()))
-        } else {
-            Err(invalid_track_info())
-        }
     }
 }
 
@@ -686,19 +728,10 @@ impl ModelValue {
         ModelValue::List(vec![ModelValue::literal("Error")])
     }
 
-    /// Extracts a vector from `(Vector value_array)`. This follows indirections in the model
-    /// to extract the actual values.
-    fn extract_vector(&self, model: &Model) -> Option<ModelValueVector> {
-        let args = self.extract_list("$Vector")?;
-        if args.len() != 1 {
-            return None;
-        }
-        args[0].extract_value_array(model)
-    }
-
-    /// Extracts a value array from it's representation.
-    /// If the representation uses maps it is defined by `(ValueArray map_key size)`. The function
-    /// follows indirections in the model. We find the value array map at `Select_[$int]$Value`.
+    /// Extracts a vector from its representation.
+    ///
+    /// If the representation uses arrays it is defined by `(Vec* map_key size)`. The function
+    /// follows indirections in the model. We find the array map at `Select_[$int]$Value`.
     /// This has e.g. the form
     /// ```model
     ///   Select_[$int]$Value -> {
@@ -713,41 +746,31 @@ impl ModelValue {
     /// or
     /// ```(as seq.empty (Seq T@$Value))```
     /// depending on whether it is an empty or nonempty sequence, respectively.
-    // In this case the sequence representation does not explicitly denote a constructor like ValueArray(..),
-    // instead reducing expressions to native SMT sequence theory expressions.
-    fn extract_value_array(&self, model: &Model) -> Option<ModelValueVector> {
-        if ValueArrayRep::ValueArrayIsSeq == model.value_array_rep {
-            // Implementation of $ValueArray using sequences
-            let seq_type_modelvalue = ModelValue::List(vec![
-                ModelValue::literal("Seq"),
-                ModelValue::List(vec![ModelValue::literal("T@$Value")]),
-            ]);
-            let empty_seq_model_value = ModelValue::List(vec![
-                ModelValue::literal("as"),
-                ModelValue::List(vec![ModelValue::literal("seq.empty")]),
-                seq_type_modelvalue,
-            ]);
-            let default = ModelValue::error();
-            let (size, values) = if &empty_seq_model_value == self {
-                (0, BTreeMap::new())
-            } else {
-                let mut values = BTreeMap::new();
-                let seq_elems = self.extract_list("seq.++")?;
-                for (index, wrapped_seq_value_at_index) in seq_elems.iter().enumerate() {
-                    let seq_value_at_index =
-                        (&wrapped_seq_value_at_index).extract_list("seq.unit")?;
-                    values.insert(index, (&seq_value_at_index[0]).clone());
+    fn extract_vector(&self, model: &Model) -> Option<ModelValueVector> {
+        if matches!(model.vector_theory, VectorTheory::SmtSeq) {
+            // Implementation of vectors using sequences
+            let mut values = BTreeMap::new();
+            if let Some(elems) = self.extract_list("as") {
+                if elems.is_empty() {
+                    return None;
                 }
-                (seq_elems.len(), values)
+            } else if let Some(elem) = self.extract_seq_unit() {
+                values.insert(0, elem);
+            } else if let Some(elems) = self.extract_list("seq.++") {
+                for (i, e) in elems.iter().enumerate() {
+                    values.insert(i, e.extract_seq_unit()?);
+                }
+            } else {
+                return None;
             };
             Some(ModelValueVector {
-                size,
+                size: values.len(),
                 values,
-                default,
+                default: ModelValue::error(),
             })
         } else {
-            // Implementation of $ValueArray using integer maps
-            let args = self.extract_list("$ValueArray")?;
+            // Implementation of vectors using arrays
+            let args = self.extract_list_ctor_prefix("Vec_")?;
             if args.len() != 2 {
                 return None;
             }
@@ -755,7 +778,7 @@ impl ModelValue {
             let map_key = &args[0];
             let value_array_map = model
                 .vars
-                .get(&ModelValue::literal("Select_[$int]$Value"))?
+                .get(&ModelValue::literal("Select__T@[Int]$Value_"))?
                 .extract_map()?;
             let mut values = BTreeMap::new();
             let mut default = ModelValue::error();
@@ -778,6 +801,16 @@ impl ModelValue {
         }
     }
 
+    fn extract_seq_unit(&self) -> Option<ModelValue> {
+        self.extract_list("seq.unit").and_then(|elems| {
+            if elems.is_empty() {
+                None
+            } else {
+                Some(elems[0].clone())
+            }
+        })
+    }
+
     fn extract_map(&self) -> Option<&BTreeMap<ModelValue, ModelValue>> {
         if let ModelValue::Map(map) = self {
             Some(map)
@@ -794,6 +827,26 @@ impl ModelValue {
             }
         }
         None
+    }
+
+    /// Extract the arguments of a list of the form `(<ctor> element...)`.
+    fn extract_list_ctor_prefix(&self, ctor_prefix: &str) -> Option<&[ModelValue]> {
+        if let ModelValue::List(elems) = self {
+            if !elems.is_empty() && elems[0].extract_literal()?.starts_with(ctor_prefix) {
+                return Some(&elems[1..]);
+            }
+        }
+        None
+    }
+
+    /// Extract a $Value box value.
+    fn extract_box(&self) -> &ModelValue {
+        if let ModelValue::List(elems) = self {
+            if elems.len() == 2 {
+                return &elems[1];
+            }
+        }
+        self
     }
 
     /// Extract a number from a literal.
@@ -820,15 +873,6 @@ impl ModelValue {
         } else {
             None
         }
-    }
-
-    /// Extract the value of a primitive.
-    fn extract_primitive(&self, ctor: &str) -> Option<&String> {
-        let args = self.extract_list(ctor)?;
-        if args.len() != 1 {
-            return None;
-        }
-        (&args[0]).extract_literal()
     }
 
     /// Extract a literal.
@@ -861,27 +905,30 @@ impl ModelValue {
         match ty {
             Type::Primitive(PrimitiveType::U8) => Some(PrettyDoc::text(format!(
                 "{}u8",
-                self.extract_primitive("$Integer")?
+                self.extract_literal().and_then(|s| s.parse::<u8>().ok())?
             ))),
             Type::Primitive(PrimitiveType::U64) => Some(PrettyDoc::text(
-                self.extract_primitive("$Integer")?.to_string(),
+                self.extract_literal()
+                    .and_then(|s| s.parse::<u64>().ok())?
+                    .to_string(),
             )),
             Type::Primitive(PrimitiveType::U128) => Some(PrettyDoc::text(format!(
                 "{}u128",
-                self.extract_primitive("$Integer")?.to_string()
+                self.extract_literal()
+                    .and_then(|s| s.parse::<u128>().ok())?
             ))),
             Type::Primitive(PrimitiveType::Num) => Some(PrettyDoc::text(format!(
-                "{}u128",
-                self.extract_primitive("$Integer")?.to_string()
+                "{}num",
+                self.extract_literal()
+                    .and_then(|s| s.parse::<i128>().ok())?
             ))),
             Type::Primitive(PrimitiveType::Bool) => Some(PrettyDoc::text(
-                self.extract_primitive("$Boolean")?.to_string(),
+                self.extract_literal()
+                    .and_then(|s| s.parse::<bool>().ok())?
+                    .to_string(),
             )),
             Type::Primitive(PrimitiveType::Address) | Type::Primitive(PrimitiveType::Signer) => {
-                let addr = BigInt::parse_bytes(
-                    &self.extract_primitive("$Address")?.clone().into_bytes(),
-                    10,
-                )?;
+                let addr = BigInt::parse_bytes(&self.extract_literal()?.clone().into_bytes(), 10)?;
                 Some(PrettyDoc::text(format!("0x{}", &addr.to_str_radix(16))))
             }
             Type::Vector(param) => self.pretty_vector(wrapper, model, param),
@@ -933,7 +980,11 @@ impl ModelValue {
                 // outside of domain, ignore.
                 continue;
             }
-            let mut p = values.values.get(idx)?.pretty_or_raw(wrapper, model, param);
+            let mut p = values
+                .values
+                .get(idx)?
+                .extract_box()
+                .pretty_or_raw(wrapper, model, param);
             if *idx > next {
                 p = PrettyDoc::text(format!("{}: ", idx)).append(p);
                 sparse = true;
@@ -944,6 +995,7 @@ impl ModelValue {
         if next < values.size || sparse {
             let default = values
                 .default
+                .extract_box()
                 .pretty(wrapper, model, param)
                 .unwrap_or_else(|| PrettyDoc::text("undef"));
             entries.insert(0, PrettyDoc::text(format!("(size): {}", values.size)));
@@ -969,8 +1021,14 @@ impl ModelValue {
             .enumerate()
             .map(|(i, f)| {
                 let ty = f.get_type().instantiate(params);
-                let v = values.values.get(&i).unwrap_or(&values.default);
-                let vp = v.pretty_or_raw(wrapper, model, &ty);
+                let v = values
+                    .values
+                    .get(&i)
+                    .unwrap_or(&values.default)
+                    .extract_box();
+                let vp = v
+                    .pretty(wrapper, model, &ty)
+                    .unwrap_or_else(|| values.default.pretty_or_raw(wrapper, model, &ty));
                 PrettyDoc::text(format!(
                     "{}",
                     f.get_name().display(struct_env.symbol_pool())
@@ -1138,8 +1196,4 @@ fn index_range_check(max: usize) -> impl FnOnce(usize) -> Result<usize, ModelPar
             )))
         }
     }
-}
-
-fn invalid_track_info() -> ModelParseError {
-    ModelParseError::new("invalid debug track info")
 }

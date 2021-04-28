@@ -5,7 +5,7 @@ use crate::{
     access_path::AccessPath,
     account_config::{
         constants::{xus_tag, CORE_CODE_ADDRESS, DIEM_MODULE_NAME},
-        resources::PreburnResource,
+        resources::PreburnWithMetadataResource,
     },
 };
 use move_core_types::{
@@ -20,11 +20,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 pub struct PreburnQueueResource {
-    preburns: Vec<PreburnResource>,
+    preburns: Vec<PreburnWithMetadataResource>,
 }
 
 impl PreburnQueueResource {
-    pub fn preburns(&self) -> &[PreburnResource] {
+    pub fn preburns(&self) -> &[PreburnWithMetadataResource] {
         &self.preburns
     }
 

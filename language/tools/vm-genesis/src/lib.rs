@@ -7,13 +7,14 @@ mod genesis_context;
 pub mod genesis_gas_schedule;
 
 use crate::{genesis_context::GenesisStateView, genesis_gas_schedule::INITIAL_GAS_SCHEDULE};
-use compiled_stdlib::{
-    legacy::transaction_scripts::LegacyStdlibScript, stdlib_modules, StdLibOptions,
-};
 use diem_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey},
     PrivateKey, Uniform,
 };
+use diem_framework_releases::{
+    current_module_blobs, legacy::transaction_scripts::LegacyStdlibScript,
+};
+use diem_transaction_builder::stdlib as transaction_builder;
 use diem_types::{
     account_address,
     account_config::{
@@ -22,18 +23,17 @@ use diem_types::{
     },
     chain_id::{ChainId, NamedChain},
     contract_event::ContractEvent,
-    on_chain_config::VMPublishingOption,
+    on_chain_config::{VMPublishingOption, DIEM_MAX_KNOWN_VERSION},
     transaction::{
-        authenticator::AuthenticationKey, ChangeSet, Script, Transaction, WriteSetPayload,
+        authenticator::AuthenticationKey, ChangeSet, ScriptFunction, Transaction, WriteSetPayload,
     },
 };
 use diem_vm::{convert_changeset_and_events, data_cache::StateViewCache};
+use move_binary_format::CompiledModule;
 use move_core_types::{
     account_address::AccountAddress,
-    gas_schedule::{CostTable, GasAlgebra, GasUnits},
     identifier::Identifier,
     language_storage::{ModuleId, StructTag, TypeTag},
-    transaction_argument::convert_txn_args,
     value::{serialize_values, MoveValue},
 };
 use move_vm_runtime::{
@@ -41,16 +41,16 @@ use move_vm_runtime::{
     move_vm::MoveVM,
     session::Session,
 };
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
+use move_vm_types::gas_schedule::GasStatus;
 use once_cell::sync::Lazy;
 use rand::prelude::*;
-use transaction_builder::encode_create_designated_dealer_script;
-use vm::CompiledModule;
+use transaction_builder::encode_create_designated_dealer_script_function;
 
 // The seed is arbitrarily picked to produce a consistent key. XXX make this more formal?
 const GENESIS_SEED: [u8; 32] = [42; 32];
 
 const GENESIS_MODULE_NAME: &str = "Genesis";
+const DIEM_VERSION_MODULE_NAME: &str = "DiemVersion";
 
 pub static GENESIS_KEYPAIR: Lazy<(Ed25519PrivateKey, Ed25519PublicKey)> = Lazy::new(|| {
     let mut rng = StdRng::from_seed(GENESIS_SEED);
@@ -59,16 +59,14 @@ pub static GENESIS_KEYPAIR: Lazy<(Ed25519PrivateKey, Ed25519PublicKey)> = Lazy::
     (private_key, public_key)
 });
 
-pub static ZERO_COST_SCHEDULE: Lazy<CostTable> = Lazy::new(zero_cost_schedule);
-
 const ZERO_AUTH_KEY: [u8; 32] = [0; 32];
 
 pub type Name = Vec<u8>;
 // Defines a validator owner and maps that to an operator
-pub type OperatorAssignment = (Option<Ed25519PublicKey>, Name, Script);
+pub type OperatorAssignment = (Option<Ed25519PublicKey>, Name, ScriptFunction);
 
 // Defines a validator operator and maps that to a validator (config)
-pub type OperatorRegistration = (Ed25519PublicKey, Name, Script);
+pub type OperatorRegistration = (Ed25519PublicKey, Name, ScriptFunction);
 
 pub fn encode_genesis_transaction(
     diem_root_key: Ed25519PublicKey,
@@ -83,7 +81,7 @@ pub fn encode_genesis_transaction(
         &treasury_compliance_key,
         operator_assignments,
         operator_registrations,
-        stdlib_modules(StdLibOptions::Compiled).bytes_opt.unwrap(), // Must use compiled stdlib,
+        current_module_blobs(), // Must use compiled stdlib,
         vm_publishing_option
             .unwrap_or_else(|| VMPublishingOption::locked(LegacyStdlibScript::allowlist())),
         chain_id,
@@ -180,7 +178,7 @@ fn exec_function(
             &Identifier::new(function_name).unwrap(),
             ty_args,
             args,
-            &mut CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000)),
+            &mut GasStatus::new_unmetered(),
             log_context,
         )
         .unwrap_or_else(|e| {
@@ -193,19 +191,20 @@ fn exec_function(
         });
 }
 
-fn exec_script(
+fn exec_script_function(
     session: &mut Session<StateViewCache>,
     log_context: &impl LogContext,
     sender: AccountAddress,
-    script: &Script,
+    script_function: &ScriptFunction,
 ) {
     session
-        .execute_script(
-            script.code().to_vec(),
-            script.ty_args().to_vec(),
-            convert_txn_args(script.args()),
+        .execute_script_function(
+            script_function.module(),
+            script_function.function(),
+            script_function.ty_args().to_vec(),
+            script_function.args().to_vec(),
             vec![sender],
-            &mut CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000)),
+            &mut GasStatus::new_unmetered(),
             log_context,
         )
         .unwrap()
@@ -260,6 +259,21 @@ fn create_and_initialize_main_accounts(
         ]),
     );
 
+    // Bump the Diem Framework version number
+    exec_function(
+        session,
+        log_context,
+        DIEM_VERSION_MODULE_NAME,
+        "set",
+        vec![],
+        serialize_values(&vec![
+            MoveValue::Signer(root_diem_root_address),
+            MoveValue::U64(
+                /* Diem Framework major version number */ DIEM_MAX_KNOWN_VERSION.major,
+            ),
+        ]),
+    );
+
     // Bump the sequence number for the Association account. If we don't do this and a
     // subsequent transaction (e.g., minting) is sent from the Assocation account, a problem
     // arises: both the genesis transaction and the subsequent transaction have sequence
@@ -286,25 +300,27 @@ fn create_and_initialize_testnet_minting(
     public_key: &Ed25519PublicKey,
 ) {
     let genesis_auth_key = AuthenticationKey::ed25519(public_key);
-    let create_dd_script = encode_create_designated_dealer_script(
+    let create_dd_script = encode_create_designated_dealer_script_function(
         account_config::xus_tag(),
         0,
         account_config::testnet_dd_account_address(),
         genesis_auth_key.prefix().to_vec(),
         b"moneybags".to_vec(), // name
         true,                  // add_all_currencies
-    );
+    )
+    .into_script_function();
 
-    let mint_max_xus = transaction_builder::encode_tiered_mint_script(
+    let mint_max_xus = transaction_builder::encode_tiered_mint_script_function(
         account_config::xus_tag(),
         0,
         account_config::testnet_dd_account_address(),
         std::u64::MAX / 2,
         3,
-    );
+    )
+    .into_script_function();
 
     // Create the DD account
-    exec_script(
+    exec_script_function(
         session,
         log_context,
         account_config::treasury_compliance_account_address(),
@@ -313,7 +329,7 @@ fn create_and_initialize_testnet_minting(
 
     // mint XUS.
     let treasury_compliance_account_address = account_config::treasury_compliance_account_address();
-    exec_script(
+    exec_script_function(
         session,
         log_context,
         treasury_compliance_account_address,
@@ -321,11 +337,14 @@ fn create_and_initialize_testnet_minting(
     );
 
     let testnet_dd_account_address = account_config::testnet_dd_account_address();
-    exec_script(
+    exec_script_function(
         session,
         log_context,
         testnet_dd_account_address,
-        &transaction_builder::encode_rotate_authentication_key_script(genesis_auth_key.to_vec()),
+        &transaction_builder::encode_rotate_authentication_key_script_function(
+            genesis_auth_key.to_vec(),
+        )
+        .into_script_function(),
     );
 }
 
@@ -348,13 +367,15 @@ fn create_and_initialize_owners_operators(
         let staged_owner_auth_key =
             diem_config::utils::default_validator_owner_auth_key_from_name(owner_name);
         let owner_address = staged_owner_auth_key.derived_address();
-        let create_owner_script = transaction_builder::encode_create_validator_account_script(
-            0,
-            owner_address,
-            staged_owner_auth_key.prefix().to_vec(),
-            owner_name.clone(),
-        );
-        exec_script(
+        let create_owner_script =
+            transaction_builder::encode_create_validator_account_script_function(
+                0,
+                owner_address,
+                staged_owner_auth_key.prefix().to_vec(),
+                owner_name.clone(),
+            )
+            .into_script_function();
+        exec_script_function(
             session,
             log_context,
             diem_root_address,
@@ -368,11 +389,14 @@ fn create_and_initialize_owners_operators(
             ZERO_AUTH_KEY.to_vec()
         };
 
-        exec_script(
+        exec_script_function(
             session,
             log_context,
             owner_address,
-            &transaction_builder::encode_rotate_authentication_key_script(real_owner_auth_key),
+            &transaction_builder::encode_rotate_authentication_key_script_function(
+                real_owner_auth_key,
+            )
+            .into_script_function(),
         );
     }
 
@@ -381,13 +405,14 @@ fn create_and_initialize_owners_operators(
         let operator_auth_key = AuthenticationKey::ed25519(&operator_key);
         let operator_account = account_address::from_public_key(operator_key);
         let create_operator_script =
-            transaction_builder::encode_create_validator_operator_account_script(
+            transaction_builder::encode_create_validator_operator_account_script_function(
                 0,
                 operator_account,
                 operator_auth_key.prefix().to_vec(),
                 operator_name.clone(),
-            );
-        exec_script(
+            )
+            .into_script_function();
+        exec_script_function(
             session,
             log_context,
             diem_root_address,
@@ -398,13 +423,13 @@ fn create_and_initialize_owners_operators(
     // Set the validator operator for each validator owner
     for (_owner_key, owner_name, op_assignment) in operator_assignments {
         let owner_address = diem_config::utils::validator_owner_account_from_name(owner_name);
-        exec_script(session, log_context, owner_address, op_assignment);
+        exec_script_function(session, log_context, owner_address, op_assignment);
     }
 
     // Set the validator config for each validator
     for (operator_key, _, registration) in operator_registrations {
         let operator_account = account_address::from_public_key(operator_key);
-        exec_script(session, log_context, operator_account, registration);
+        exec_script_function(session, log_context, operator_account, registration);
     }
 
     // Add each validator to the validator set
@@ -439,7 +464,7 @@ fn publish_stdlib(
             .publish_module(
                 (*bytes).clone(),
                 *module_id.address(),
-                &mut CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000)),
+                &mut GasStatus::new_unmetered(),
                 log_context,
             )
             .unwrap_or_else(|e| panic!("Failure publishing module {:?}, {:?}", module_id, e));
@@ -487,14 +512,22 @@ fn verify_genesis_write_set(events: &[ContractEvent]) {
     assert_eq!(new_epoch_events[0].sequence_number(), 0,);
 }
 
+/// An enum specifying whether the compiled stdlib/scripts should be used or freshly built versions
+/// should be used.
+#[derive(Debug, Eq, PartialEq)]
+pub enum GenesisOptions {
+    Compiled,
+    Fresh,
+}
+
 /// Generate an artificial genesis `ChangeSet` for testing
-pub fn generate_genesis_change_set_for_testing(stdlib_options: StdLibOptions) -> ChangeSet {
-    generate_test_genesis(
-        &stdlib_modules(stdlib_options).bytes_vec(),
-        VMPublishingOption::open(),
-        None,
-    )
-    .0
+pub fn generate_genesis_change_set_for_testing(genesis_options: GenesisOptions) -> ChangeSet {
+    let modules = match genesis_options {
+        GenesisOptions::Compiled => diem_framework_releases::current_module_blobs(),
+        GenesisOptions::Fresh => diem_framework::module_blobs(),
+    };
+
+    generate_test_genesis(modules, VMPublishingOption::open(), None).0
 }
 
 pub fn test_genesis_transaction() -> Transaction {
@@ -504,7 +537,7 @@ pub fn test_genesis_transaction() -> Transaction {
 
 pub fn test_genesis_change_set_and_validators(count: Option<usize>) -> (ChangeSet, Vec<Validator>) {
     generate_test_genesis(
-        &stdlib_modules(StdLibOptions::Compiled).bytes_vec(),
+        &current_module_blobs(),
         VMPublishingOption::locked(LegacyStdlibScript::allowlist()),
         count,
     )
@@ -542,26 +575,28 @@ impl Validator {
     }
 
     fn operator_assignment(&self) -> OperatorAssignment {
-        let set_operator_script = transaction_builder::encode_set_validator_operator_script(
+        let script_function = transaction_builder::encode_set_validator_operator_script_function(
             self.name.clone(),
             self.operator_address,
-        );
-
+        )
+        .into_script_function();
         (
             Some(self.key.public_key()),
             self.name.clone(),
-            set_operator_script,
+            script_function,
         )
     }
 
     fn operator_registration(&self) -> OperatorRegistration {
-        let script = transaction_builder::encode_register_validator_config_script(
-            self.owner_address,
-            self.key.public_key().to_bytes().to_vec(),
-            bcs::to_bytes(&[0u8; 0]).unwrap(),
-            bcs::to_bytes(&[0u8; 0]).unwrap(),
-        );
-        (self.key.public_key(), self.name.clone(), script)
+        let script_function =
+            transaction_builder::encode_register_validator_config_script_function(
+                self.owner_address,
+                self.key.public_key().to_bytes().to_vec(),
+                bcs::to_bytes(&[0u8; 0]).unwrap(),
+                bcs::to_bytes(&[0u8; 0]).unwrap(),
+            )
+            .into_script_function();
+        (self.key.public_key(), self.name.clone(), script_function)
     }
 }
 

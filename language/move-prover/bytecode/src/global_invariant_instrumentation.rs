@@ -15,12 +15,12 @@ use crate::{
     usage_analysis,
 };
 
-use crate::spec_translator::SpecTranslator;
-
 use move_model::{
     ast::{ConditionKind, GlobalInvariant},
-    model::{FunctionEnv, GlobalEnv, GlobalId, QualifiedId, StructId},
+    exp_generator::ExpGenerator,
+    model::{FunctionEnv, GlobalEnv, GlobalId, QualifiedInstId, StructId},
     pragmas::CONDITION_ISOLATED_PROP,
+    spec_translator::SpecTranslator,
 };
 use std::collections::BTreeSet;
 
@@ -82,7 +82,7 @@ impl FunctionTargetProcessor for GlobalInvariantInstrumentationProcessor {
 }
 
 struct Instrumenter<'a> {
-    options: &'a ProverOptions,
+    _options: &'a ProverOptions,
     builder: FunctionDataBuilder<'a>,
 }
 
@@ -93,7 +93,10 @@ impl<'a> Instrumenter<'a> {
         data: FunctionData,
     ) -> FunctionData {
         let builder = FunctionDataBuilder::new(fun_env, data);
-        let mut instrumenter = Instrumenter { options, builder };
+        let mut instrumenter = Instrumenter {
+            _options: options,
+            builder,
+        };
         instrumenter.instrument();
         instrumenter.builder.data
     }
@@ -128,17 +131,16 @@ impl<'a> Instrumenter<'a> {
         let env = self.builder.global_env();
         let mut invariants = BTreeSet::new();
         let mut invariants_for_modified_memory = BTreeSet::new();
-        for mem in usage_analysis::get_used_memory(&self.builder.get_target()) {
-            invariants.extend(env.get_global_invariants_for_memory(*mem));
+        for mem in usage_analysis::get_used_memory_inst(&self.builder.get_target()) {
+            invariants.extend(env.get_global_invariants_for_memory(mem));
         }
-        for mem in usage_analysis::get_modified_memory(&self.builder.get_target()) {
-            invariants_for_modified_memory.extend(env.get_global_invariants_for_memory(*mem));
+        for mem in usage_analysis::get_modified_memory_inst(&self.builder.get_target()) {
+            invariants_for_modified_memory.extend(env.get_global_invariants_for_memory(mem));
         }
 
         let mut assumed_at_update = BTreeSet::new();
         let module_env = &self.builder.fun_env.module_env;
         let mut translated = SpecTranslator::translate_invariants(
-            self.options,
             &mut self.builder,
             invariants.iter().filter_map(|id| {
                 env.get_global_invariant(*id).filter(|inv| {
@@ -177,25 +179,27 @@ impl<'a> Instrumenter<'a> {
         use Operation::*;
         match &bc {
             Call(_, _, WriteBack(GlobalRoot(mem), _), ..) => {
-                self.emit_invariants_for_update(*mem, assumed_at_update, move |builder| {
+                let mem = mem.clone();
+                self.emit_invariants_for_update(&mem, assumed_at_update, move |builder| {
                     builder.emit(bc);
                 })
             }
-            Call(_, _, MoveTo(mid, sid, _), ..) | Call(_, _, MoveFrom(mid, sid, _), ..) => self
-                .emit_invariants_for_update(
-                    mid.qualified(*sid),
+            Call(_, _, MoveTo(mid, sid, inst), ..) | Call(_, _, MoveFrom(mid, sid, inst), ..) => {
+                self.emit_invariants_for_update(
+                    &mid.qualified_inst(*sid, inst.to_owned()),
                     assumed_at_update,
                     move |builder| {
                         builder.emit(bc);
                     },
-                ),
+                )
+            }
             _ => self.builder.emit(bc),
         }
     }
 
     fn emit_invariants_for_update<F>(
         &mut self,
-        mem: QualifiedId<StructId>,
+        mem: &QualifiedInstId<StructId>,
         assumed_at_update: &BTreeSet<GlobalId>,
         emit_update: F,
     ) where
@@ -204,11 +208,8 @@ impl<'a> Instrumenter<'a> {
         // Translate the invariants, computing any state to be saved as well. State saves are
         // necessary for update invariants which contain the `old(..)` expressions.
         let invariants = self.get_verified_invariants_for_mem(mem);
-        let mut translated = SpecTranslator::translate_invariants(
-            self.options,
-            &mut self.builder,
-            invariants.iter().cloned(),
-        );
+        let mut translated =
+            SpecTranslator::translate_invariants(&mut self.builder, invariants.iter().cloned());
 
         // Emit all necessary state saves for 'update' invariants.
         self.builder
@@ -236,6 +237,14 @@ impl<'a> Instrumenter<'a> {
         // Emit the code which performs the update on `mem`.
         emit_update(&mut self.builder);
 
+        // Emit all expression debug traces.
+        for (node_id, exp) in std::mem::take(&mut translated.debug_traces) {
+            let temp = self.builder.emit_let(exp).0;
+            self.builder.emit_with(|id| {
+                Bytecode::Call(id, vec![], Operation::TraceExp(node_id), vec![temp], None)
+            });
+        }
+
         // Emit assertions of translated invariants.
         for (loc, _, cond) in std::mem::take(&mut translated.invariants) {
             self.builder.set_next_debug_comment(format!(
@@ -254,7 +263,7 @@ impl<'a> Instrumenter<'a> {
     /// target.
     fn get_verified_invariants_for_mem(
         &self,
-        mem: QualifiedId<StructId>,
+        mem: &QualifiedInstId<StructId>,
     ) -> Vec<&'a GlobalInvariant> {
         let env = self.builder.global_env();
         env.get_global_invariants_for_memory(mem)

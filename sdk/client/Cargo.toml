@@ -10,9 +10,10 @@ publish = ["crates-io"]
 edition = "2018"
 
 [features]
-default = ["async", "blocking"]
+default = ["async", "blocking", "faucet"]
 blocking = ["ureq", "ipnet"]
 async = ["reqwest", "tokio"]
+faucet = ["reqwest", "reqwest/blocking", "blocking"]
 
 [dependencies]
 anyhow = "1.0.38"
@@ -23,6 +24,7 @@ serde_json = "1.0.64"
 
 diem-crypto = { path = "../../crypto/crypto", version = "0.0.1" }
 diem-json-rpc-types  = { path = "../../json-rpc/types", version = "0.0.1" }
+move-core-types = { path = "../../language/move-core/types", version = "0.0.1" }
 diem-types = { path = "../../types", version = "0.0.1" }
 
 # Optional Dependencies

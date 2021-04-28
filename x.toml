@@ -4,10 +4,6 @@ version = "0.6.1"
 [system-tests]
 smoke-test = { path = "smoke-test" }
 
-[cargo]
-toolchain = "nightly-2020-10-09"
-flags = "-Zfeatures=all"
-
 [cargo.sccache]
 bucket = "ci-artifacts.diem.com"
 prefix = "sccache/diem/"
@@ -40,6 +36,9 @@ allowed = [
     "clippy::eval-order-dependence",
     "clippy::new-without-default",
     "clippy::rc_buffer",
+    "clippy::upper_case_acronyms",
+    # vec_init_with_push is buggy: https://github.com/rust-lang/rust-clippy/issues/6956
+    "clippy::vec_init_then_push",
 ]
 warn = [
     "clippy::wildcard_dependencies",
@@ -125,6 +124,7 @@ whitespace-exceptions = [
     "developers.diem.com/**/*.md",
     "**/*.exp",
     "**/*.errmap",
+    "**/*.abi",
 ]
 
 [workspace.enforced-attributes]
@@ -160,7 +160,6 @@ members = [
     "bytecode-verifier-tests",
     "cli",
     "cluster-test",
-    "datatest-stable",
     "diem-documentation-tool",
     "diem-fuzz",
     "diem-fuzzer",
@@ -173,6 +172,7 @@ members = [
     "diemdb-benchmark",
     "executor-benchmark",
     "executor-test-helpers",
+    "forge",
     "functional-tests",
     "generate-format",
     "invalid-mutations",
@@ -188,6 +188,9 @@ members = [
     "move-lang-test-utils",
     "move-prover-test-utils",
     "move-vm-integration-tests",
+    "offchain",
+    "scratchpad-benchmark",
+    "sdk-compatibility",
     "serializer-tests",
     "smoke-test",
     "socket-bench-server",
@@ -202,6 +205,7 @@ members = [
 [workspace.move-to-diem-deps]
 diem_crates_in_language = [
     "diem-framework",
+    "diem-framework-releases",
     "diem-events-fetcher",
     "diem-validator-interface",
     "diem-transaction-replay",
@@ -223,60 +227,45 @@ exclude = [
 # This is a list of existing move to diem dependencies that we plan to eliminate over time.
 # You should refrain from adding new entries to this list in general.
 existing_deps = [
+    # Tier 0 - essential components that must be included in the first batch of crates getting
+    #          moved to the new repo
+    ["move-lang", "fallible"],                                # copy_slice_to_vec
+    ["move-lang", "diem-framework"],                          # sanity check to ensure that the diem-framework compiles
+    ["invalid-mutations", "diem-proptest-helpers"],           # pick_slice_idxs
+    ["bytecode-verifier-tests", "diem-framework-releases"],
+    ["compiler", "diem-framework-releases"],
+    ["move-prover", "diem-temppath"],
+    ["bytecode", "diem-temppath"],
+    ["docgen", "diem-temppath"],
+    ["move-vm-natives", "diem-crypto"],
+    ["move-vm-runtime", "diem-logger"],
+    ["move-vm-runtime", "diem-infallible"],                   # `Mutex`
+    ["move-vm-runtime", "diem-crypto"],                       # using `HashValue` as keys in the script cache
+    ["abigen", "diem-types"],                                 # ABI types
+    ["abigen", "diem-temppath"],
+    ["move-cli", "vm-genesis"],
+    ["move-cli", "diem-vm"],
+    ["move-cli", "diem-types"],                               # `ContractEvent`
+    ["move-cli", "diem-framework"],
+    ["move-cli", "diem-framework-releases"],
+    ["move-binary-format", "num-variants"],                   # counting the number of bytecodes
+
+    # Tier 1 - crates that can wait a little bit longer?
     ["language-benchmarks", "language-e2e-tests"],
     ["language-benchmarks", "diem-vm"],
     ["language-benchmarks", "diem-types"],
     ["language-benchmarks", "diem-state-view"],
     ["language-benchmarks", "diem-proptest-helpers"],
-    ["invalid-mutations", "diem-proptest-helpers"],
-    ["compiled-stdlib", "diem-types"],
-    ["compiled-stdlib", "diem-proptest-helpers"],
-    ["compiled-stdlib", "diem-framework"],
-    ["compiled-stdlib", "diem-crypto"],
-    ["move-lang", "fallible"],
-    ["move-lang", "diem-framework"],
-    ["move-lang", "datatest-stable"],
-    ["move-lang-test-utils", "datatest-stable"],
-    ["move-model", "datatest-stable"],
-    ["move-prover", "diem-temppath"],
-    ["move-prover", "datatest-stable"],
-    ["abigen", "diem-types"],
-    ["abigen", "diem-temppath"],
-    ["abigen", "datatest-stable"],
-    ["boogie-backend", "diem-temppath"],
-    ["boogie-backend", "datatest-stable"],
-    ["bytecode", "diem-types"],
-    ["bytecode", "diem-temppath"],
-    ["bytecode", "datatest-stable"],
-    ["docgen", "diem-temppath"],
-    ["docgen", "datatest-stable"],
-    ["errmapgen", "datatest-stable"],
-    ["move-vm-natives", "diem-crypto"],
-    ["move-vm-runtime", "diem-state-view"],
-    ["move-vm-runtime", "diem-logger"],
-    ["move-vm-runtime", "diem-infallible"],
-    ["move-vm-runtime", "diem-crypto"],
-    ["move-vm-types", "diem-crypto"],
-    ["module-generation", "diem-types"],
     ["test-generation", "language-e2e-tests"],
     ["test-generation", "diem-vm"],
     ["test-generation", "diem-types"],
     ["test-generation", "diem-state-view"],
     ["test-generation", "diem-logger"],
     ["test-generation", "diem-config"],
-    ["disassembler", "diem-types"],
-    ["move-cli", "vm-genesis"],
-    ["move-cli", "diem-vm"],
-    ["move-cli", "diem-types"],
-    ["move-cli", "diem-state-view"],
-    ["move-cli", "diem-framework"],
-    ["move-cli", "datatest-stable"],
-    ["move-coverage", "diem-types"],
+    ["resource-viewer", "diem-framework-releases"],
     ["resource-viewer", "diem-types"],
     ["resource-viewer", "diem-state-view"],
-    ["vm", "num-variants"],
-    ["vm", "diem-proptest-helpers"],
-    ["vm", "diem-crypto"],
+    ["move-explain", "diem-framework-releases"],
 ]
 
 # Interesting subsets of the workspace, These are used for generating and
@@ -324,7 +313,7 @@ mark-changed = "all"
 
 # Core devtools files.
 [[determinator.path-rule]]
-globs = ["cargo-toolchain", "cargo-flags", "scripts/dev_setup.sh", "x.toml"]
+globs = ["scripts/dev_setup.sh", "x.toml"]
 mark-changed = "all"
 
 [[determinator.path-rule]]
@@ -338,8 +327,13 @@ globs = ["diem.png", ".assets/diem.png", "storage/data.png"]
 mark-changed = []
 
 [[determinator.path-rule]]
+# Ignore *.md documentation
+globs = ["*.md"]
+mark-changed = []
+
+[[determinator.path-rule]]
 # Required by get_stdlib_script_abis in transaction-builder-generator.
-globs = ["language/diem-framework/compiled/transaction_scripts/abi/**/*"]
+globs = ["language/diem-framework/releases/artifacts/current/script_abis/**/*"]
 mark-changed = ["transaction-builder-generator"]
 post-rule = "skip-rules"
 

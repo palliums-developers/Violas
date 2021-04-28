@@ -14,13 +14,13 @@ use diem_types::{
     write_set::{WriteOp, WriteSet},
 };
 use fail::fail_point;
+use move_binary_format::errors::*;
 use move_core_types::{
     account_address::AccountAddress,
     language_storage::{ModuleId, StructTag},
 };
 use move_vm_runtime::data_cache::RemoteCache;
 use std::collections::btree_map::BTreeMap;
-use vm::errors::*;
 
 /// A local cache for a given a `StateView`. The cache is private to the Diem layer
 /// but can be used as a one shot cache for systems that need a simple `RemoteCache`
@@ -96,10 +96,6 @@ impl<'block> StateView for StateViewCache<'block> {
                 }
             },
         }
-    }
-
-    fn multi_get(&self, _access_paths: &[AccessPath]) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
-        unimplemented!()
     }
 
     fn is_genesis(&self) -> bool {

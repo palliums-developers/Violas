@@ -2,8 +2,8 @@
 //! account: vivian, 1000000, 0, validator
 
 // Changing the publishing option from Open to CustomScript
-// Step 1: Make sure we can publish module at the beginning
-module FooConfig {
+// Step 1: Make sure we can publish module {{default}}::at the beginning
+module {{default}}::FooConfig {
     struct T {
         version: u64,
     }
@@ -19,7 +19,8 @@ module FooConfig {
 //! new-transaction
 script {
 use 0x1::DiemTransactionPublishingOption;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     assert(DiemTransactionPublishingOption::is_script_allowed(account, &x""), 0);
 }
 }
@@ -29,7 +30,8 @@ fun main(account: &signer) {
 //! new-transaction
 script {
 use 0x1::DiemTransactionPublishingOption;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     DiemTransactionPublishingOption::set_open_script(account)
 }
 }
@@ -45,7 +47,8 @@ fun main(account: &signer) {
 script {
 use 0x1::DiemTransactionPublishingOption;
 
-fun main(config: &signer) {
+fun main(config: signer) {
+    let config = &config;
     DiemTransactionPublishingOption::set_open_module(config, false)
 }
 }
@@ -54,7 +57,7 @@ fun main(config: &signer) {
 // check: NewEpochEvent
 
 //! new-transaction
-module FooConfig2 {
+module {{default}}::FooConfig2 {
     struct T {
         version: u64,
     }

@@ -7,15 +7,16 @@
 //! - All types non-signer arguments have a type that is valid for constants
 //! - Has an empty return type
 use crate::binary_views::BinaryIndexedView;
-use move_core_types::{identifier::IdentStr, vm_status::StatusCode};
-use vm::{
+use move_binary_format::{
     access::ModuleAccess,
     errors::{Location, PartialVMError, PartialVMResult, VMResult},
     file_format::{
         CompiledModule, CompiledScript, SignatureIndex, SignatureToken, TableIndex, Visibility,
     },
+    file_format_common::VERSION_1,
     IndexKind,
 };
+use move_core_types::{identifier::IdentStr, vm_status::StatusCode};
 
 /// This function checks the extra requirements on the signature of the main function of a script.
 pub fn verify_script(script: &CompiledScript) -> VMResult<()> {
@@ -66,18 +67,20 @@ fn verify_main_signature_impl(
 ) -> PartialVMResult<()> {
     use SignatureToken as S;
     let arguments = &resolver.signature_at(parameters).0;
-    // Check that all `&signer` arguments occur before non-`&signer` arguments
-    let all_args_have_valid_type = arguments
-        .iter()
-        .skip_while(|typ| {
-            match typ {
-                // &signer is a type that can only be populated by the Move VM. And its value is filled
-                // based on the sender of the transaction
-                S::Reference(inner) => matches!(&**inner, S::Signer),
-                _ => false,
-            }
-        })
-        .all(|typ| typ.is_valid_for_constant());
+    // Check that all `signer` arguments occur before non-`signer` arguments
+    // signer is a type that can only be populated by the Move VM. And its value is filled
+    // based on the sender of the transaction
+    let all_args_have_valid_type = if resolver.version() <= VERSION_1 {
+        arguments
+            .iter()
+            .skip_while(|typ| matches!(typ, S::Reference(inner) if matches!(&**inner, S::Signer)))
+            .all(|typ| typ.is_valid_for_constant())
+    } else {
+        arguments
+            .iter()
+            .skip_while(|typ| matches!(typ, S::Signer))
+            .all(|typ| typ.is_valid_for_constant())
+    };
     let has_valid_return_type = match return_type_opt {
         Some(idx) => resolver.signature_at(idx).0.is_empty(),
         None => true,

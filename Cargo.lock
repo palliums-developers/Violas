@@ -148,9 +148,12 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.38"
+version = "1.0.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afddf7f520a80dbf76e6f50a35bca42a2331ef227a28b3b6dc5c2e2338d114b1"
+checksum = "28b2cd92db5cbd74e8e5028f7e27dd7aa3090e89e4f2a197cc7c8dfb69c7063b"
+dependencies = [
+ "backtrace",
+]
 
 [[package]]
 name = "arbitrary"
@@ -492,16 +495,14 @@ dependencies = [
  "bytecode",
  "codespan",
  "codespan-reporting",
- "datatest-stable",
- "diem-temppath",
  "diem-workspace-hack",
  "futures",
  "handlebars",
  "itertools 0.10.0",
  "log",
+ "move-binary-format",
  "move-core-types",
  "move-model",
- "move-prover-test-utils",
  "num 0.4.0",
  "once_cell",
  "pretty",
@@ -510,7 +511,34 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "vm",
+]
+
+[[package]]
+name = "boogie-backend-exp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "boogie-backend",
+ "bytecode",
+ "codespan",
+ "codespan-reporting",
+ "diem-workspace-hack",
+ "futures",
+ "itertools 0.10.0",
+ "log",
+ "move-binary-format",
+ "move-core-types",
+ "move-model",
+ "num 0.4.0",
+ "once_cell",
+ "pretty",
+ "rand 0.8.3",
+ "regex",
+ "serde",
+ "serde_json",
+ "tera",
+ "tokio",
 ]
 
 [[package]]
@@ -575,11 +603,11 @@ dependencies = [
  "codespan-reporting",
  "datatest-stable",
  "diem-temppath",
- "diem-types",
  "diem-workspace-hack",
  "ir-to-bytecode",
  "itertools 0.10.0",
  "log",
+ "move-binary-format",
  "move-core-types",
  "move-model",
  "move-prover-test-utils",
@@ -588,7 +616,6 @@ dependencies = [
  "petgraph",
  "serde",
  "serde_json",
- "vm",
 ]
 
 [[package]]
@@ -600,10 +627,10 @@ dependencies = [
  "codespan",
  "codespan-reporting",
  "diem-workspace-hack",
+ "move-binary-format",
  "move-core-types",
  "move-ir-types",
  "serde",
- "vm",
 ]
 
 [[package]]
@@ -615,9 +642,9 @@ dependencies = [
  "diem-workspace-hack",
  "invalid-mutations",
  "mirai-annotations",
+ "move-binary-format",
  "move-core-types",
  "petgraph",
- "vm",
 ]
 
 [[package]]
@@ -625,13 +652,13 @@ name = "bytecode-verifier-tests"
 version = "0.1.0"
 dependencies = [
  "bytecode-verifier",
- "compiled-stdlib",
+ "diem-framework-releases",
  "diem-workspace-hack",
  "invalid-mutations",
+ "move-binary-format",
  "move-core-types",
  "petgraph",
  "proptest",
- "vm",
 ]
 
 [[package]]
@@ -657,9 +684,9 @@ checksum = "4964518bd3b4a8190e832886cdc0da9794f12e8e6c1613a9e90ff331c4c8724b"
 
 [[package]]
 name = "camino"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fb25ad5c4211e3c7abded8f00b480e6d1608845dcf14157e9e81d5432e9ac16"
+checksum = "d4648c6d00a709aa069a236adcaae4f605a6241c72bf5bee79331a4b625921a9"
 dependencies = [
  "serde",
 ]
@@ -769,6 +796,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "chrono-tz"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2554a3155fec064362507487171dcc4edc3df60cb10f3a1fb10ed8094822b120"
+dependencies = [
+ "chrono",
+ "parse-zoneinfo",
+]
+
+[[package]]
 name = "chunked_transfer"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -816,16 +853,18 @@ dependencies = [
  "anyhow",
  "bcs",
  "chrono",
- "compiled-stdlib",
  "compiler",
  "crash-handler",
  "diem-client",
  "diem-config",
  "diem-crypto",
+ "diem-framework",
+ "diem-framework-releases",
  "diem-infallible",
  "diem-logger",
  "diem-metrics",
  "diem-temppath",
+ "diem-transaction-builder",
  "diem-types",
  "diem-wallet",
  "diem-workspace-hack",
@@ -841,7 +880,6 @@ dependencies = [
  "serde",
  "structopt 0.3.21",
  "tokio",
- "transaction-builder",
  "walkdir",
 ]
 
@@ -877,10 +915,11 @@ dependencies = [
  "diem-node",
  "diem-operational-tool",
  "diem-retrier",
+ "diem-sdk",
  "diem-secure-storage",
  "diem-swarm",
  "diem-time-service",
- "diem-trace",
+ "diem-transaction-builder",
  "diem-types",
  "diem-workspace-hack",
  "flate2",
@@ -911,7 +950,6 @@ dependencies = [
  "termion",
  "tokio",
  "toml",
- "transaction-builder",
 ]
 
 [[package]]
@@ -931,6 +969,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "600c3317d4705222ff820139aaa76a3a208024ffc41f894da565a4c3b949d4c9"
 dependencies = [
  "codespan",
+ "serde",
  "termcolor",
  "unicode-width",
 ]
@@ -958,27 +997,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "compiled-stdlib"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bcs",
- "bytecode-verifier",
- "diem-crypto",
- "diem-framework",
- "diem-proptest-helpers",
- "diem-types",
- "diem-workspace-hack",
- "include_dir",
- "move-core-types",
- "once_cell",
- "proptest",
- "proptest-derive",
- "sha2",
- "vm",
-]
-
-[[package]]
 name = "compiler"
 version = "0.1.0"
 dependencies = [
@@ -986,14 +1004,14 @@ dependencies = [
  "bcs",
  "bytecode-source-map",
  "bytecode-verifier",
- "compiled-stdlib",
+ "diem-framework-releases",
  "diem-workspace-hack",
  "ir-to-bytecode",
+ "move-binary-format",
  "move-core-types",
  "move-ir-types",
  "serde_json",
  "structopt 0.3.21",
- "vm",
 ]
 
 [[package]]
@@ -1015,7 +1033,6 @@ dependencies = [
  "diem-metrics",
  "diem-secure-storage",
  "diem-temppath",
- "diem-trace",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
@@ -1170,6 +1187,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "criterion-cpu-time"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63aaaf47e457badbcb376c65a49d0f182c317ebd97dc6d1ced94c8e1d09c0f3a"
+dependencies = [
+ "criterion",
+ "libc",
+]
+
+[[package]]
 name = "criterion-plot"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1195,9 +1222,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dca26ee1f8d361640700bde38b2c37d8c22b3ce2d360e1fc1c74ea4b0aa7d775"
+checksum = "06ed27e177f16d65f0f0c22a213e17c696ace5dd64b14258b52f9417ccb52db4"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils",
@@ -1321,9 +1348,10 @@ dependencies = [
 
 [[package]]
 name = "datatest-stable"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0ff02642cff6f40d39f61c8d51cb394fd313e1aa2057833b91ad788c4e9331f"
 dependencies = [
- "diem-workspace-hack",
  "regex",
  "structopt 0.3.21",
  "termcolor",
@@ -1380,6 +1408,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "deunicode"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "850878694b7933ca4c9569d30a34b55031b9b139ee1fc7b94a527c4ef960d690"
+
+[[package]]
+name = "diem-assets-proof"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bcs",
+ "diem-client",
+ "diem-crypto",
+ "diem-types",
+ "diem-workspace-hack",
+ "move-core-types",
+ "serde",
+ "serde_json",
+ "structopt 0.3.21",
+]
+
+[[package]]
 name = "diem-bitvec"
 version = "0.1.0"
 dependencies = [
@@ -1404,6 +1454,7 @@ dependencies = [
  "diem-workspace-hack",
  "hex",
  "ipnet",
+ "move-core-types",
  "reqwest",
  "serde",
  "serde_json",
@@ -1557,17 +1608,36 @@ dependencies = [
  "diem-crypto",
  "diem-types",
  "diem-workspace-hack",
+ "dir-diff",
  "docgen",
  "errmapgen",
  "log",
+ "move-binary-format",
+ "move-core-types",
  "move-lang",
  "move-prover",
  "move-stdlib",
+ "once_cell",
  "rayon",
  "sha2",
+ "tempfile",
  "transaction-builder-generator",
- "vm",
  "walkdir",
+]
+
+[[package]]
+name = "diem-framework-releases"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bcs",
+ "bytecode-verifier",
+ "diem-crypto",
+ "diem-types",
+ "diem-workspace-hack",
+ "include_dir",
+ "move-binary-format",
+ "once_cell",
 ]
 
 [[package]]
@@ -1604,6 +1674,7 @@ dependencies = [
  "executor-types",
  "hex",
  "language-e2e-tests",
+ "move-binary-format",
  "move-core-types",
  "move-vm-types",
  "network",
@@ -1620,7 +1691,6 @@ dependencies = [
  "storage-interface",
  "structopt 0.3.21",
  "ureq",
- "vm",
 ]
 
 [[package]]
@@ -1637,6 +1707,7 @@ dependencies = [
  "diem-network-address-encryption",
  "diem-secure-storage",
  "diem-temppath",
+ "diem-transaction-builder",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
@@ -1649,7 +1720,6 @@ dependencies = [
  "structopt 0.3.21",
  "thiserror",
  "toml",
- "transaction-builder",
  "vm-genesis",
 ]
 
@@ -1708,10 +1778,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bcs",
- "compiled-stdlib",
  "diem-client",
  "diem-config",
  "diem-crypto",
+ "diem-framework-releases",
  "diem-genesis-tool",
  "diem-json-rpc-types",
  "diem-logger",
@@ -1720,7 +1790,6 @@ dependencies = [
  "diem-node",
  "diem-proptest-helpers",
  "diem-temppath",
- "diem-trace",
  "diem-transaction-builder",
  "diem-types",
  "diem-workspace-hack",
@@ -1739,6 +1808,7 @@ dependencies = [
  "once_cell",
  "proptest",
  "rand 0.8.3",
+ "regex",
  "reqwest",
  "scratchpad",
  "serde",
@@ -1757,6 +1827,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bcs",
+ "diem-client",
  "diem-config",
  "diem-crypto",
  "diem-json-rpc-types",
@@ -1864,6 +1935,7 @@ dependencies = [
  "diem-secure-storage",
  "diem-temppath",
  "diem-time-service",
+ "diem-transaction-builder",
  "diem-types",
  "diem-workspace-hack",
  "hex",
@@ -1872,7 +1944,6 @@ dependencies = [
  "structopt 0.3.21",
  "thiserror",
  "toml",
- "transaction-builder",
 ]
 
 [[package]]
@@ -1889,7 +1960,6 @@ dependencies = [
  "diem-logger",
  "diem-metrics",
  "diem-proptest-helpers",
- "diem-trace",
  "diem-types",
  "diem-workspace-hack",
  "enum_dispatch",
@@ -1984,7 +2054,6 @@ dependencies = [
  "diem-secure-storage",
  "diem-temppath",
  "diem-time-service",
- "diem-trace",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
@@ -2015,20 +2084,26 @@ dependencies = [
  "diem-config",
  "diem-crypto",
  "diem-global-constants",
+ "diem-infallible",
  "diem-management",
  "diem-network-address-encryption",
  "diem-secure-storage",
  "diem-temppath",
+ "diem-transaction-builder",
  "diem-types",
  "diem-workspace-hack",
  "fallible",
+ "futures",
  "hex",
+ "netcore",
+ "network",
  "serde",
  "serde_json",
  "structopt 0.3.21",
  "thiserror",
+ "tokio",
+ "tokio-util",
  "toml",
- "transaction-builder",
 ]
 
 [[package]]
@@ -2068,12 +2143,14 @@ dependencies = [
 name = "diem-sdk"
 version = "0.0.1"
 dependencies = [
+ "bcs",
  "diem-client",
  "diem-crypto",
  "diem-transaction-builder",
  "diem-types",
  "diem-workspace-hack",
  "move-core-types",
+ "rand_core 0.6.2",
 ]
 
 [[package]]
@@ -2146,9 +2223,9 @@ name = "diem-storage-inspector"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "compiled-stdlib",
  "diem-config",
  "diem-crypto",
+ "diem-framework-releases",
  "diem-logger",
  "diem-types",
  "diem-workspace-hack",
@@ -2200,23 +2277,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diem-trace"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "diem-logger",
- "diem-metrics",
- "diem-workspace-hack",
- "once_cell",
- "reqwest",
- "serde",
- "serde_json",
- "structopt 0.3.21",
- "tokio",
-]
-
-[[package]]
 name = "diem-transaction-builder"
 version = "0.0.1"
 dependencies = [
@@ -2236,8 +2296,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bcs",
- "compiled-stdlib",
  "diem-framework",
+ "diem-framework-releases",
  "diem-state-view",
  "diem-types",
  "diem-validator-interface",
@@ -2245,6 +2305,7 @@ dependencies = [
  "diem-workspace-hack",
  "diemdb",
  "difference",
+ "move-binary-format",
  "move-cli",
  "move-core-types",
  "move-lang",
@@ -2253,7 +2314,6 @@ dependencies = [
  "move-vm-types",
  "resource-viewer",
  "structopt 0.3.21",
- "vm",
  "vm-genesis",
 ]
 
@@ -2297,9 +2357,9 @@ dependencies = [
  "diem-types",
  "diem-workspace-hack",
  "diemdb",
+ "move-binary-format",
  "scratchpad",
  "storage-interface",
- "vm",
 ]
 
 [[package]]
@@ -2328,14 +2388,15 @@ dependencies = [
  "anyhow",
  "bcs",
  "diem-crypto",
+ "diem-framework-releases",
  "diem-logger",
  "diem-metrics",
  "diem-state-view",
- "diem-trace",
  "diem-types",
  "diem-workspace-hack",
  "fail",
  "mirai-annotations",
+ "move-binary-format",
  "move-core-types",
  "move-vm-runtime",
  "move-vm-types",
@@ -2344,7 +2405,6 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
- "vm",
 ]
 
 [[package]]
@@ -2372,11 +2432,15 @@ dependencies = [
 name = "diem-workspace-hack"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "backtrace",
+ "bstr",
  "byteorder",
  "bytes",
  "cc",
  "chrono",
  "clap",
+ "codespan-reporting",
  "crossbeam-channel",
  "crossbeam-deque",
  "crossbeam-utils",
@@ -2387,7 +2451,6 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
- "futures-task",
  "futures-util",
  "hyper",
  "indexmap",
@@ -2400,6 +2463,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "petgraph",
+ "plotters",
  "proc-macro2 0.4.30",
  "prost",
  "quote 0.6.13",
@@ -2428,10 +2492,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bcs",
- "compiled-stdlib",
  "diem-crypto",
  "diem-crypto-derive",
  "diem-framework",
+ "diem-framework-releases",
  "diem-state-view",
  "diem-transaction-replay",
  "diem-types",
@@ -2440,6 +2504,7 @@ dependencies = [
  "diem-workspace-hack",
  "diemdb",
  "handlebars",
+ "move-binary-format",
  "move-core-types",
  "move-lang",
  "move-vm-runtime",
@@ -2450,7 +2515,6 @@ dependencies = [
  "serde_json",
  "structopt 0.3.21",
  "tempfile",
- "vm",
 ]
 
 [[package]]
@@ -2494,6 +2558,7 @@ dependencies = [
  "anyhow",
  "byteorder",
  "diem-config",
+ "diem-crypto",
  "diem-jellyfish-merkle",
  "diem-types",
  "diem-workspace-hack",
@@ -2611,13 +2676,12 @@ dependencies = [
  "bytecode-source-map",
  "bytecode-verifier",
  "colored",
- "diem-types",
  "diem-workspace-hack",
+ "move-binary-format",
  "move-core-types",
  "move-coverage",
  "move-ir-types",
  "structopt 0.3.21",
- "vm",
 ]
 
 [[package]]
@@ -2653,6 +2717,18 @@ name = "dtoa"
 version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88d7ed2934d741c6b37e33e3832298e8850b53fd2d2bea03873375596c7cea4e"
+
+[[package]]
+name = "duct"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fc6a0a59ed0888e0041cf708e66357b7ae1a82f1c67247e1f93b5e0818f7d8d"
+dependencies = [
+ "libc",
+ "once_cell",
+ "os_pipe",
+ "shared_child",
+]
 
 [[package]]
 name = "ed25519"
@@ -2785,6 +2861,7 @@ dependencies = [
  "diem-secure-net",
  "diem-secure-storage",
  "diem-temppath",
+ "diem-transaction-builder",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
@@ -2795,7 +2872,6 @@ dependencies = [
  "serde",
  "storage-client",
  "thiserror",
- "transaction-builder",
 ]
 
 [[package]]
@@ -2804,11 +2880,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bcs",
- "compiled-stdlib",
  "compiler",
  "consensus-types",
  "diem-config",
  "diem-crypto",
+ "diem-framework-releases",
  "diem-genesis-tool",
  "diem-infallible",
  "diem-logger",
@@ -2816,7 +2892,7 @@ dependencies = [
  "diem-secure-net",
  "diem-state-view",
  "diem-temppath",
- "diem-trace",
+ "diem-transaction-builder",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
@@ -2833,7 +2909,6 @@ dependencies = [
  "serde",
  "serde_json",
  "storage-interface",
- "transaction-builder",
  "vm-genesis",
 ]
 
@@ -2846,6 +2921,7 @@ dependencies = [
  "diem-genesis-tool",
  "diem-infallible",
  "diem-logger",
+ "diem-transaction-builder",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
@@ -2859,7 +2935,6 @@ dependencies = [
  "storage-interface",
  "storage-service",
  "structopt 0.3.21",
- "transaction-builder",
 ]
 
 [[package]]
@@ -2871,6 +2946,7 @@ dependencies = [
  "diem-crypto",
  "diem-genesis-tool",
  "diem-temppath",
+ "diem-transaction-builder",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
@@ -2881,7 +2957,6 @@ dependencies = [
  "storage-interface",
  "storage-service",
  "tempfile",
- "transaction-builder",
  "vm-genesis",
 ]
 
@@ -2972,6 +3047,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
+name = "forge"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "debug-interface",
+ "diem-config",
+ "diem-genesis-tool",
+ "diem-sdk",
+ "diem-swarm",
+ "diem-workspace-hack",
+ "generate-key",
+ "rand 0.8.3",
+ "structopt 0.3.21",
+ "termcolor",
+]
+
+[[package]]
 name = "form_urlencoded"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2998,6 +3090,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2022715d62ab30faffd124d40b76f4134a550a87792276512b18d63272333394"
 
 [[package]]
+name = "fst"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d79238883cf0307100b90aba4a755d8051a3182305dfe7f649a1e9dc0517006f"
+
+[[package]]
 name = "fuchsia-cprng"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3010,10 +3108,11 @@ dependencies = [
  "aho-corasick",
  "anyhow",
  "bytecode-verifier",
- "compiled-stdlib",
  "datatest-stable",
  "diem-config",
  "diem-crypto",
+ "diem-framework",
+ "diem-framework-releases",
  "diem-state-view",
  "diem-types",
  "diem-vm",
@@ -3023,13 +3122,13 @@ dependencies = [
  "itertools 0.10.0",
  "language-e2e-tests",
  "mirai-annotations",
+ "move-binary-format",
  "move-core-types",
  "once_cell",
  "regex",
  "term_size",
  "termcolor",
  "thiserror",
- "vm",
  "vm-genesis",
 ]
 
@@ -3196,12 +3295,12 @@ name = "genesis-viewer"
 version = "0.1.0"
 dependencies = [
  "bcs",
- "compiled-stdlib",
+ "diem-framework-releases",
  "diem-types",
  "diem-workspace-hack",
+ "move-binary-format",
  "resource-viewer",
  "structopt 0.3.21",
- "vm",
  "vm-genesis",
 ]
 
@@ -3282,6 +3381,17 @@ dependencies = [
  "fnv",
  "log",
  "regex",
+]
+
+[[package]]
+name = "globwalk"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93e3af942408868f6934a7b85134a3230832b9977cf66125df2f9edcfce4ddcc"
+dependencies = [
+ "bitflags",
+ "ignore",
+ "walkdir",
 ]
 
 [[package]]
@@ -3509,6 +3619,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "494b4d60369511e7dea41cf646832512a94e542f68bb9c49e54518e0f468eb47"
 
 [[package]]
+name = "humansize"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6cab2627acfc432780848602f3f558f7e9dd427352224b0d9324025796d2a5e"
+
+[[package]]
 name = "humantime"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3581,6 +3697,24 @@ dependencies = [
  "matches",
  "unicode-bidi",
  "unicode-normalization",
+]
+
+[[package]]
+name = "ignore"
+version = "0.4.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b287fb45c60bb826a0dc68ff08742b9d88a2fea13d6e0c286b3172065aaf878c"
+dependencies = [
+ "crossbeam-utils",
+ "globset",
+ "lazy_static",
+ "log",
+ "memchr",
+ "regex",
+ "same-file",
+ "thread_local",
+ "walkdir",
+ "winapi-util",
 ]
 
 [[package]]
@@ -3662,9 +3796,9 @@ version = "0.1.0"
 dependencies = [
  "diem-proptest-helpers",
  "diem-workspace-hack",
+ "move-binary-format",
  "move-core-types",
  "proptest",
- "vm",
 ]
 
 [[package]]
@@ -3679,15 +3813,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytecode-verifier",
- "compiled-stdlib",
  "datatest-stable",
+ "diem-framework-releases",
  "diem-types",
  "diem-workspace-hack",
  "functional-tests",
  "ir-to-bytecode",
+ "move-binary-format",
  "move-core-types",
  "move-ir-types",
- "vm",
 ]
 
 [[package]]
@@ -3701,11 +3835,11 @@ dependencies = [
  "diem-workspace-hack",
  "ir-to-bytecode-syntax",
  "log",
+ "move-binary-format",
  "move-core-types",
  "move-ir-types",
  "rental",
  "thiserror",
- "vm",
 ]
 
 [[package]]
@@ -3876,12 +4010,14 @@ dependencies = [
  "anyhow",
  "bytecode-verifier",
  "criterion",
+ "criterion-cpu-time",
  "diem-proptest-helpers",
  "diem-state-view",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
  "language-e2e-tests",
+ "move-binary-format",
  "move-core-types",
  "move-lang",
  "move-stdlib",
@@ -3889,7 +4025,6 @@ dependencies = [
  "move-vm-types",
  "once_cell",
  "proptest",
- "vm",
 ]
 
 [[package]]
@@ -3898,17 +4033,19 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bcs",
- "compiled-stdlib",
  "compiler",
  "diem-config",
  "diem-crypto",
+ "diem-framework-releases",
  "diem-proptest-helpers",
  "diem-state-view",
+ "diem-transaction-builder",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
  "goldenfile",
  "hex",
+ "move-binary-format",
  "move-core-types",
  "move-vm-runtime",
  "move-vm-types",
@@ -3916,8 +4053,6 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "rand 0.8.3",
- "transaction-builder",
- "vm",
  "vm-genesis",
 ]
 
@@ -3927,9 +4062,9 @@ version = "0.1.0"
 dependencies = [
  "bcs",
  "bytecode-verifier",
- "compiled-stdlib",
  "compiler",
  "diem-crypto",
+ "diem-framework-releases",
  "diem-logger",
  "diem-transaction-builder",
  "diem-types",
@@ -3937,13 +4072,12 @@ dependencies = [
  "diem-workspace-hack",
  "diem-writeset-generator",
  "language-e2e-tests",
+ "move-binary-format",
  "move-core-types",
  "move-vm-runtime",
  "move-vm-types",
  "proptest",
  "serde_json",
- "transaction-builder",
- "vm",
 ]
 
 [[package]]
@@ -4141,13 +4275,28 @@ name = "module-generation"
 version = "0.1.0"
 dependencies = [
  "bytecode-verifier",
- "diem-types",
  "diem-workspace-hack",
  "ir-to-bytecode",
+ "move-binary-format",
  "move-core-types",
  "move-ir-types",
  "rand 0.8.3",
- "vm",
+]
+
+[[package]]
+name = "move-binary-format"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "diem-workspace-hack",
+ "mirai-annotations",
+ "move-core-types",
+ "num-variants",
+ "once_cell",
+ "proptest",
+ "proptest-derive",
+ "ref-cast",
+ "serde_json",
 ]
 
 [[package]]
@@ -4159,12 +4308,12 @@ dependencies = [
  "codespan",
  "diem-workspace-hack",
  "disassembler",
+ "move-binary-format",
  "move-ir-types",
  "regex",
  "structopt 0.3.21",
  "termion",
  "tui",
- "vm",
 ]
 
 [[package]]
@@ -4174,26 +4323,25 @@ dependencies = [
  "anyhow",
  "bcs",
  "bytecode-verifier",
- "compiled-stdlib",
  "datatest-stable",
- "diem-framework",
- "diem-state-view",
+ "diem-framework-releases",
  "diem-types",
- "diem-vm",
  "diem-workspace-hack",
  "difference",
  "disassembler",
  "errmapgen",
  "include_dir",
+ "move-binary-format",
  "move-core-types",
  "move-coverage",
  "move-lang",
  "move-vm-runtime",
  "move-vm-types",
  "once_cell",
+ "petgraph",
+ "read-write-set",
  "resource-viewer",
  "structopt 0.3.21",
- "vm",
  "vm-genesis",
  "walkdir",
 ]
@@ -4228,15 +4376,14 @@ dependencies = [
  "bytecode-verifier",
  "codespan",
  "colored",
- "diem-types",
  "diem-workspace-hack",
+ "move-binary-format",
  "move-core-types",
  "move-ir-types",
  "once_cell",
  "petgraph",
  "serde",
  "structopt 0.3.21",
- "vm",
 ]
 
 [[package]]
@@ -4244,7 +4391,7 @@ name = "move-explain"
 version = "0.1.0"
 dependencies = [
  "bcs",
- "compiled-stdlib",
+ "diem-framework-releases",
  "diem-workspace-hack",
  "errmapgen",
  "move-core-types",
@@ -4282,6 +4429,7 @@ dependencies = [
  "fallible",
  "hex",
  "ir-to-bytecode",
+ "move-binary-format",
  "move-core-types",
  "move-ir-types",
  "move-lang-test-utils",
@@ -4291,7 +4439,6 @@ dependencies = [
  "regex",
  "structopt 0.3.21",
  "tempfile",
- "vm",
  "walkdir",
 ]
 
@@ -4327,6 +4474,7 @@ version = "0.1.0"
 dependencies = [
  "datatest-stable",
  "diem-workspace-hack",
+ "walkdir",
 ]
 
 [[package]]
@@ -4340,8 +4488,10 @@ dependencies = [
  "codespan-reporting",
  "datatest-stable",
  "diem-workspace-hack",
+ "disassembler",
  "itertools 0.10.0",
  "log",
+ "move-binary-format",
  "move-core-types",
  "move-ir-types",
  "move-lang",
@@ -4350,7 +4500,6 @@ dependencies = [
  "once_cell",
  "regex",
  "serde",
- "vm",
 ]
 
 [[package]]
@@ -4361,8 +4510,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "boogie-backend",
+ "boogie-backend-exp",
  "bytecode",
- "bytecode-source-map",
  "clap",
  "codespan",
  "codespan-reporting",
@@ -4372,10 +4521,10 @@ dependencies = [
  "docgen",
  "errmapgen",
  "futures",
- "handlebars",
  "hex",
  "itertools 0.10.0",
  "log",
+ "move-binary-format",
  "move-ir-types",
  "move-lang",
  "move-model",
@@ -4384,14 +4533,13 @@ dependencies = [
  "once_cell",
  "pretty",
  "rand 0.8.3",
- "regex",
  "serde",
  "serde_json",
  "shell-words",
  "simplelog",
  "tokio",
  "toml",
- "vm",
+ "walkdir",
 ]
 
 [[package]]
@@ -4423,13 +4571,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "diem-workspace-hack",
+ "move-binary-format",
  "move-core-types",
  "move-lang",
  "move-vm-runtime",
  "move-vm-test-utils",
  "move-vm-types",
  "tempfile",
- "vm",
 ]
 
 [[package]]
@@ -4439,12 +4587,12 @@ dependencies = [
  "diem-crypto",
  "diem-workspace-hack",
  "mirai-annotations",
+ "move-binary-format",
  "move-core-types",
  "move-vm-types",
  "once_cell",
  "sha2",
  "smallvec",
- "vm",
 ]
 
 [[package]]
@@ -4457,18 +4605,17 @@ dependencies = [
  "diem-crypto",
  "diem-infallible",
  "diem-logger",
- "diem-state-view",
  "diem-workspace-hack",
  "fail",
  "hex",
  "mirai-annotations",
+ "move-binary-format",
  "move-core-types",
  "move-lang",
  "move-vm-natives",
  "move-vm-types",
  "once_cell",
  "proptest",
- "vm",
 ]
 
 [[package]]
@@ -4477,9 +4624,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "diem-workspace-hack",
+ "move-binary-format",
  "move-core-types",
  "move-vm-runtime",
- "vm",
 ]
 
 [[package]]
@@ -4487,16 +4634,15 @@ name = "move-vm-types"
 version = "0.1.0"
 dependencies = [
  "bcs",
- "diem-crypto",
  "diem-workspace-hack",
  "mirai-annotations",
+ "move-binary-format",
  "move-core-types",
  "once_cell",
  "proptest",
  "serde",
  "sha2",
  "smallvec",
- "vm",
 ]
 
 [[package]]
@@ -4664,6 +4810,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "nextest-runner"
+version = "0.1.0"
+source = "git+https://github.com/diem/diem-devtools?rev=1b61853016059b2dca577cefafff2825b49494a0#1b61853016059b2dca577cefafff2825b49494a0"
+dependencies = [
+ "aho-corasick",
+ "anyhow",
+ "atty",
+ "camino",
+ "chrono",
+ "crossbeam-channel",
+ "duct",
+ "num_cpus",
+ "once_cell",
+ "quick-junit",
+ "rayon",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "structopt 0.3.21",
+ "termcolor",
+]
+
+[[package]]
 name = "nibble_vec"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4719,6 +4888,20 @@ dependencies = [
 
 [[package]]
 name = "num"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b7a8e9be5e039e2ff869df49155f1c06bd01ade2117ec783e56ab0932b67a8f"
+dependencies = [
+ "num-bigint 0.3.2",
+ "num-complex 0.3.1",
+ "num-integer",
+ "num-iter",
+ "num-rational 0.3.2",
+ "num-traits",
+]
+
+[[package]]
+name = "num"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43db66d1170d347f9a065114077f7dccb00c1b9478c89384490a3425279a4606"
@@ -4744,6 +4927,17 @@ dependencies = [
 
 [[package]]
 name = "num-bigint"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d0a3d5e207573f948a9e5376662aa743a2ea13f7c50a554d7af443a73fbfeba"
+dependencies = [
+ "autocfg 1.0.1",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-bigint"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e0d047c1062aa51e256408c560894e5251f08925980e53cf1aa5bd00eec6512"
@@ -4760,6 +4954,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6b19411a9719e753aff12e5187b74d60d3dc449ec3f4dc21e3989c3f554bc95"
 dependencies = [
  "autocfg 1.0.1",
+ "num-traits",
+]
+
+[[package]]
+name = "num-complex"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "747d632c0c558b87dbabbe6a82f3b4ae03720d0646ac5b7b4dae89394be5f2c5"
+dependencies = [
  "num-traits",
 ]
 
@@ -4812,6 +5015,18 @@ checksum = "5c000134b5dbf44adc5cb772486d335293351644b801551abe8f75c84cfa4aef"
 dependencies = [
  "autocfg 1.0.1",
  "num-bigint 0.2.6",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-rational"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12ac428b1cb17fce6f731001d307d351ec70a6d202fc2e60f7d4c5e42d8f4f07"
+dependencies = [
+ "autocfg 1.0.1",
+ "num-bigint 0.3.2",
  "num-integer",
  "num-traits",
 ]
@@ -4874,6 +5089,21 @@ name = "object"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9a7ab5d64814df0fe4a4b5ead45ed6c5f181ee3ff04ba344313a6c80446c5d4"
+
+[[package]]
+name = "offchain"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "diem-sdk",
+ "diem-workspace-hack",
+ "hex",
+ "rand_core 0.6.2",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "uuid",
+]
 
 [[package]]
 name = "once_cell"
@@ -4942,6 +5172,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "os_pipe"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb233f06c2307e1f5ce2ecad9f8121cffbbee2c95428f44ea85222e460d0d213"
+dependencies = [
+ "libc",
+ "winapi 0.3.9",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4964,6 +5204,15 @@ dependencies = [
  "redox_syscall 0.2.5",
  "smallvec",
  "winapi 0.3.9",
+]
+
+[[package]]
+name = "parse-zoneinfo"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c705f256449c60da65e11ff6626e0c16a0a0b96aaa348de61376b249bc340f41"
+dependencies = [
+ "regex",
 ]
 
 [[package]]
@@ -5146,6 +5395,26 @@ dependencies = [
  "cpuid-bool 0.2.0",
  "opaque-debug 0.3.0",
  "universal-hash",
+]
+
+[[package]]
+name = "pomelo"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76dd249f63dbbc68c8caa9b5fd16b32c7ba5da56df93d40a9552c91ebfd2a1cd"
+dependencies = [
+ "pomelo-impl",
+]
+
+[[package]]
+name = "pomelo-impl"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "597c3287a549da151aca6ada2795ecde089c7527bd5093114e8e0e1c3f0e52b1"
+dependencies = [
+ "proc-macro2 1.0.24",
+ "quote 1.0.9",
+ "syn 1.0.64",
 ]
 
 [[package]]
@@ -5340,6 +5609,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "prover-lab"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytecode",
+ "chrono",
+ "clap",
+ "codespan",
+ "codespan-reporting",
+ "datatest-stable",
+ "diem-workspace-hack",
+ "hex",
+ "itertools 0.10.0",
+ "log",
+ "move-model",
+ "move-prover",
+ "move-prover-test-utils",
+ "num 0.4.0",
+ "plotters",
+ "serde",
+ "serde_json",
+ "simplelog",
+ "z3tracer",
+]
+
+[[package]]
 name = "proxy"
 version = "0.1.0"
 dependencies = [
@@ -5367,6 +5662,25 @@ name = "quick-error"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ac73b1112776fc109b2e61909bc46c7e1bf0d7f690ffb1676553acce16d5cda"
+
+[[package]]
+name = "quick-junit"
+version = "0.1.0"
+source = "git+https://github.com/diem/diem-devtools?rev=1b61853016059b2dca577cefafff2825b49494a0#1b61853016059b2dca577cefafff2825b49494a0"
+dependencies = [
+ "chrono",
+ "indexmap",
+ "quick-xml",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8533f14c8382aaad0d592c812ac3b826162128b65662331e1127b45c3d18536b"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "quote"
@@ -5633,6 +5947,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "read-write-set"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytecode",
+ "diem-workspace-hack",
+ "move-binary-format",
+ "move-core-types",
+ "move-model",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.1.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5795,18 +6121,18 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bcs",
- "compiled-stdlib",
+ "diem-framework-releases",
  "diem-state-view",
  "diem-types",
  "diem-workspace-hack",
  "hex",
+ "move-binary-format",
  "move-core-types",
  "move-vm-runtime",
  "move-vm-types",
  "once_cell",
  "serde",
  "serde_json",
- "vm",
 ]
 
 [[package]]
@@ -6143,10 +6469,38 @@ dependencies = [
  "arc-swap",
  "diem-crypto",
  "diem-infallible",
+ "diem-temppath",
  "diem-types",
  "diem-workspace-hack",
+ "diemdb",
  "itertools 0.10.0",
  "proptest",
+ "rand 0.8.3",
+ "rayon",
+ "storage-interface",
+]
+
+[[package]]
+name = "scratchpad-benchmark"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "diem-config",
+ "diem-crypto",
+ "diem-genesis-tool",
+ "diem-infallible",
+ "diem-logger",
+ "diem-types",
+ "diem-workspace-hack",
+ "diemdb",
+ "diemdb-benchmark",
+ "executor-types",
+ "itertools 0.10.0",
+ "rand 0.8.3",
+ "rayon",
+ "scratchpad",
+ "storage-interface",
+ "structopt 0.3.21",
 ]
 
 [[package]]
@@ -6157,6 +6511,17 @@ checksum = "e3042af939fca8c3453b7af0f1c66e533a15a86169e39de2657310ade8f98d3c"
 dependencies = [
  "ring",
  "untrusted",
+]
+
+[[package]]
+name = "sdk-compatibility"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "diem-sdk",
+ "diem-workspace-hack",
+ "once_cell",
+ "rand 0.8.3",
 ]
 
 [[package]]
@@ -6238,9 +6603,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.124"
+version = "1.0.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd761ff957cb2a45fbb9ab3da6512de9de55872866160b23c25f1a841e99d29f"
+checksum = "558dc50e1a5a5fa7112ca2ce4effcb321b0300c0d4ccf0776a9f60cd89031171"
 dependencies = [
  "serde_derive",
 ]
@@ -6315,9 +6680,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.124"
+version = "1.0.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1800f7693e94e186f5e25a28291ae1570da908aff7d97a095dec1e56ff99069b"
+checksum = "b093b7a2bb58203b5da3056c05b4ec1fed827dcfdb37347a8841695263b3d06d"
 dependencies = [
  "proc-macro2 1.0.24",
  "quote 1.0.9",
@@ -6334,6 +6699,17 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serde_repr"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2dc6b7951b17b051f3210b063f12cc17320e2fe30ae05b0fe2a3abb068551c76"
+dependencies = [
+ "proc-macro2 1.0.24",
+ "quote 1.0.9",
+ "syn 1.0.64",
 ]
 
 [[package]]
@@ -6399,9 +6775,9 @@ name = "serializer-tests"
 version = "0.1.0"
 dependencies = [
  "diem-workspace-hack",
+ "move-binary-format",
  "proptest",
  "proptest-derive",
- "vm",
 ]
 
 [[package]]
@@ -6461,6 +6837,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shared_child"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6be9f7d5565b1483af3e72975e2dee33879b3b86bd48c0929fccf6585d79e65a"
+dependencies = [
+ "libc",
+ "winapi 0.3.9",
+]
+
+[[package]]
 name = "shell-words"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6483,6 +6869,16 @@ dependencies = [
  "serde",
  "static_assertions",
  "thiserror",
+]
+
+[[package]]
+name = "signal-hook"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef33d6d0cd06e0840fba9985aab098c147e67e05cee14d412d3345ed14ff30ac"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
 ]
 
 [[package]]
@@ -6518,6 +6914,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c111b5bd5695e56cffe5129854aa230b39c93a305372fdbb2668ca2394eea9f8"
 
 [[package]]
+name = "slug"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3bc762e6a4b6c6fcaade73e77f9ebc6991b676f88bb2358bddb56560f073373"
+dependencies = [
+ "deunicode",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6537,13 +6942,13 @@ dependencies = [
  "backup-cli",
  "bcs",
  "cli",
- "compiled-stdlib",
  "debug-interface",
  "diem-client",
  "diem-config",
  "diem-crypto",
  "diem-events-fetcher",
  "diem-framework",
+ "diem-framework-releases",
  "diem-genesis-tool",
  "diem-global-constants",
  "diem-infallible",
@@ -6557,7 +6962,7 @@ dependencies = [
  "diem-swarm",
  "diem-temppath",
  "diem-time-service",
- "diem-trace",
+ "diem-transaction-builder",
  "diem-transaction-replay",
  "diem-types",
  "diem-validator-interface",
@@ -6576,7 +6981,18 @@ dependencies = [
  "rusty-fork",
  "statistical",
  "tokio",
- "transaction-builder",
+]
+
+[[package]]
+name = "smt2parser"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "957720820c5237fbbff199be910433e453479ec91b28c5a20d3dce7ccba52f1d"
+dependencies = [
+ "fst",
+ "num 0.3.1",
+ "pomelo",
+ "structopt 0.3.21",
 ]
 
 [[package]]
@@ -6637,9 +7053,9 @@ dependencies = [
  "bcs",
  "bytes",
  "channel",
- "compiled-stdlib",
  "diem-config",
  "diem-crypto",
+ "diem-framework-releases",
  "diem-genesis-tool",
  "diem-infallible",
  "diem-logger",
@@ -6648,6 +7064,7 @@ dependencies = [
  "diem-proptest-helpers",
  "diem-temppath",
  "diem-time-service",
+ "diem-transaction-builder",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
@@ -6672,7 +7089,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
- "transaction-builder",
  "vm-genesis",
 ]
 
@@ -6886,6 +7302,7 @@ version = "0.1.0"
 dependencies = [
  "bcs",
  "diem-crypto",
+ "diem-transaction-builder",
  "diem-types",
  "diem-workspace-hack",
  "hex",
@@ -6894,7 +7311,6 @@ dependencies = [
  "serde",
  "serde_json",
  "structopt 0.3.21",
- "transaction-builder",
 ]
 
 [[package]]
@@ -6959,6 +7375,28 @@ dependencies = [
  "redox_syscall 0.2.5",
  "remove_dir_all",
  "winapi 0.3.9",
+]
+
+[[package]]
+name = "tera"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2617ab2fb1de8587a988a761692e59895438bebf404725d4f2123251f60bf23e"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "globwalk",
+ "humansize",
+ "lazy_static",
+ "percent-encoding",
+ "pest",
+ "pest_derive",
+ "rand 0.8.3",
+ "regex",
+ "serde",
+ "serde_json",
+ "slug",
+ "unic-segment",
 ]
 
 [[package]]
@@ -7031,13 +7469,13 @@ dependencies = [
  "language-e2e-tests",
  "mirai-annotations",
  "module-generation",
+ "move-binary-format",
  "move-core-types",
  "move-vm-runtime",
  "move-vm-types",
  "num_cpus",
  "rand 0.8.3",
  "structopt 0.3.21",
- "vm",
 ]
 
 [[package]]
@@ -7377,15 +7815,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "transaction-builder"
-version = "0.1.0"
-dependencies = [
- "diem-transaction-builder",
- "diem-workspace-hack",
- "mirai-annotations",
-]
-
-[[package]]
 name = "transaction-builder-generator"
 version = "0.1.0"
 dependencies = [
@@ -7493,6 +7922,56 @@ name = "ucd-trie"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56dee185309b50d1f11bfedef0fe6d036842e3fb77413abef29f8f8d1c5d4c1c"
+
+[[package]]
+name = "unic-char-property"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8c57a407d9b6fa02b4795eb81c5b6652060a15a7903ea981f3d723e6c0be221"
+dependencies = [
+ "unic-char-range",
+]
+
+[[package]]
+name = "unic-char-range"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0398022d5f700414f6b899e10b8348231abf9173fa93144cbc1a43b9793c1fbc"
+
+[[package]]
+name = "unic-common"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80d7ff825a6a654ee85a63e80f92f054f904f21e7d12da4e22f9834a4aaa35bc"
+
+[[package]]
+name = "unic-segment"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4ed5d26be57f84f176157270c112ef57b86debac9cd21daaabbe56db0f88f23"
+dependencies = [
+ "unic-ucd-segment",
+]
+
+[[package]]
+name = "unic-ucd-segment"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2079c122a62205b421f499da10f3ee0f7697f012f55b675e002483c73ea34700"
+dependencies = [
+ "unic-char-property",
+ "unic-char-range",
+ "unic-ucd-version",
+]
+
+[[package]]
+name = "unic-ucd-version"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96bd2f2237fe450fcd0a1d2f5f4e91711124f7857ba2e964247776ebeeb7b0c4"
+dependencies = [
+ "unic-common",
+]
 
 [[package]]
 name = "unicase"
@@ -7609,6 +8088,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "936e4b492acfd135421d8dca4b1aa80a7bfc26e702ef3af710e0752684df5372"
 
 [[package]]
+name = "uuid"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "vcpkg"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7627,38 +8115,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5a972e5669d67ba988ce3dc826706fb0a8b01471c088cb0b6110b805cc36aed"
 
 [[package]]
-name = "vm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "diem-crypto",
- "diem-proptest-helpers",
- "diem-workspace-hack",
- "mirai-annotations",
- "move-core-types",
- "num-variants",
- "once_cell",
- "proptest",
- "proptest-derive",
- "ref-cast",
- "serde_json",
-]
-
-[[package]]
 name = "vm-genesis"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "bcs",
  "bytecode-verifier",
- "compiled-stdlib",
  "diem-config",
  "diem-crypto",
+ "diem-framework",
+ "diem-framework-releases",
  "diem-proptest-helpers",
  "diem-state-view",
+ "diem-transaction-builder",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
+ "move-binary-format",
  "move-core-types",
  "move-vm-runtime",
  "move-vm-types",
@@ -7666,8 +8139,6 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "rand 0.8.3",
- "transaction-builder",
- "vm",
 ]
 
 [[package]]
@@ -7678,6 +8149,7 @@ dependencies = [
  "diem-crypto",
  "diem-state-view",
  "diem-temppath",
+ "diem-transaction-builder",
  "diem-types",
  "diem-vm",
  "diem-workspace-hack",
@@ -7690,7 +8162,6 @@ dependencies = [
  "scratchpad",
  "storage-interface",
  "storage-service",
- "transaction-builder",
  "vm-genesis",
 ]
 
@@ -7932,6 +8403,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "camino",
+ "cargo_metadata",
  "chrono",
  "colored-diff",
  "determinator",
@@ -7942,6 +8414,7 @@ dependencies = [
  "indexmap",
  "indoc",
  "log",
+ "nextest-runner",
  "rayon",
  "regex",
  "serde",
@@ -8006,6 +8479,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56c1936c4cc7a1c9ab21a1ebb602eb942ba868cbd44a99cb7cdc5892335e1c85"
 dependencies = [
  "linked-hash-map",
+]
+
+[[package]]
+name = "z3tracer"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57b52f3d4b300ffa9400cd78caebaaa6ef5a0189d08ec134624e2b8f3890b6e0"
+dependencies = [
+ "smt2parser",
+ "structopt 0.3.21",
+ "thiserror",
 ]
 
 [[package]]

@@ -3,7 +3,6 @@
 
 use serde_json::json;
 
-use compiled_stdlib::shim::tmp_new_transaction_script_builders;
 use diem_crypto::hash::CryptoHash;
 use diem_transaction_builder::stdlib;
 use diem_types::{
@@ -13,6 +12,7 @@ use diem_types::{
     contract_event::EventWithProof,
     epoch_change::EpochChangeProof,
     ledger_info::LedgerInfoWithSignatures,
+    on_chain_config::DIEM_MAX_KNOWN_VERSION,
     proof::TransactionAccumulatorRangeProof,
     transaction::{ChangeSet, Transaction, TransactionInfo, TransactionPayload, WriteSetPayload},
     write_set::{WriteOp, WriteSet, WriteSetMut},
@@ -109,10 +109,11 @@ fn create_test_cases() -> Vec<Test> {
                 assert_eq!(&metadata["timestamp"], diem_ledger_timestampusec);
                 assert_eq!(&metadata["version"], diem_ledger_version);
                 assert_eq!(metadata["chain_id"], 4);
-                // for testing chain id, we init genesis with VMPublishingOption#open
-                assert_eq!(metadata["script_hash_allow_list"], json!([]));
-                assert_eq!(metadata["module_publishing_allowed"], true);
-                assert_eq!(metadata["diem_version"], 1);
+                // All genesis's start with closed publishing so this should be populated with a
+                // list of allowed scripts and publishing off
+                assert_ne!(metadata["script_hash_allow_list"], json!([]));
+                assert_eq!(metadata["module_publishing_allowed"], false);
+                assert_eq!(metadata["diem_version"], 2);
                 assert_eq!(metadata["dual_attestation_limit"], 1000000000);
                 assert_ne!(diem_ledger_timestampusec, 0);
                 assert_ne!(diem_ledger_version, 0);
@@ -163,7 +164,8 @@ fn create_test_cases() -> Vec<Test> {
                         "received_events_key": "02000000000000000000000000000000000000000a550c18",
                         "role": { "type": "unknown" },
                         "sent_events_key": "03000000000000000000000000000000000000000a550c18",
-                        "sequence_number": 1
+                        "sequence_number": 1,
+                        "version": resp.diem_ledger_version,
                     }),
                 );
             },
@@ -222,7 +224,8 @@ fn create_test_cases() -> Vec<Test> {
                             "base_url_rotation_events_key": "0200000000000000000000000000000000000000000000dd",
                         },
                         "sent_events_key": "0400000000000000000000000000000000000000000000dd",
-                        "sequence_number": 2
+                        "sequence_number": 2,
+                        "version": resp.diem_ledger_version,
                     }),
                 );
             },
@@ -282,16 +285,25 @@ fn create_test_cases() -> Vec<Test> {
                                     "currency": "XUS",
                                     "preburns": [
                                         {
-                                            "amount": 100_u64,
-                                            "currency": "XUS"
+                                            "preburn": {
+                                                "amount": 100_u64,
+                                                "currency": "XUS",
+                                            },
+                                            "metadata": "",
                                         },
                                         {
-                                            "amount": 50_u64,
-                                            "currency": "XUS"
+                                            "preburn": {
+                                                "amount": 50_u64,
+                                                "currency": "XUS"
+                                            },
+                                            "metadata": "",
                                         },
                                         {
-                                            "amount": 60_u64,
-                                            "currency": "XUS"
+                                            "preburn": {
+                                                "amount": 60_u64,
+                                                "currency": "XUS"
+                                            },
+                                            "metadata": "",
                                         },
                                     ],
                                 }
@@ -301,7 +313,8 @@ fn create_test_cases() -> Vec<Test> {
                             "base_url_rotation_events_key": "0200000000000000000000000000000000000000000000dd",
                         },
                         "sent_events_key": "0400000000000000000000000000000000000000000000dd",
-                        "sequence_number": 5
+                        "sequence_number": 5,
+                        "version": resp.diem_ledger_version,
                     }),
                 );
             },
@@ -334,7 +347,48 @@ fn create_test_cases() -> Vec<Test> {
                             "type": "parent_vasp"
                         },
                         "sent_events_key": format!("0300000000000000{}", address),
-                        "sequence_number": 1
+                        "sequence_number": 1,
+                        "version": resp.diem_ledger_version,
+                    }),
+                );
+            },
+        },
+        Test {
+            name: "get account by version",
+            run: |env: &mut testing::Env| {
+                let account = &env.vasps[0];
+                let address = format!("{:x}", &account.address);
+                // The account txn is creating child VASP.
+                let account_sequence = 0;
+
+                let resp = env.send("get_account_transaction", json!([address, account_sequence, false]));
+                let result = resp.result.unwrap();
+                let prev_version: u64 = result["version"].as_u64().unwrap() - 1;
+                let resp = env.send("get_account", json!([address, prev_version]));
+                let result = resp.result.unwrap();
+                assert_eq!(
+                    result,
+                    json!({
+                        "address": address,
+                        "authentication_key": account.auth_key().to_string(),
+                        "balances": [{"amount": 1000000000000_u64, "currency": "XUS"}],
+                        "delegated_key_rotation_capability": false,
+                        "delegated_withdrawal_capability": false,
+                        "is_frozen": false,
+                        "received_events_key": format!("0200000000000000{}", address),
+                        "role": {
+                            "base_url": "",
+                            "base_url_rotation_events_key": format!("0100000000000000{}", address),
+                            "compliance_key": "",
+                            "compliance_key_rotation_events_key": format!("0000000000000000{}", address),
+                            "expiration_time": 18446744073709551615_u64,
+                            "human_name": "Novi 0",
+                            "num_children": 0,
+                            "type": "parent_vasp"
+                        },
+                        "sent_events_key": format!("0300000000000000{}", address),
+                        "sequence_number": 0,
+                        "version": prev_version,
                     }),
                 );
             },
@@ -362,7 +416,8 @@ fn create_test_cases() -> Vec<Test> {
                             "parent_vasp_address": format!("{:x}", &parent.address),
                         },
                         "sent_events_key": format!("0100000000000000{}", address),
-                        "sequence_number": 0
+                        "sequence_number": 0,
+                        "version": resp.diem_ledger_version,
                     }),
                 );
             },
@@ -539,7 +594,7 @@ fn create_test_cases() -> Vec<Test> {
                     let txn1 = {
                         let account1 = env.get_account(0, 0);
                         let account2 = env.get_account(1, 0);
-                        let script = diem_transaction_builder::stdlib::encode_peer_to_peer_with_metadata_script(
+                        let script = stdlib::encode_peer_to_peer_with_metadata_script(
                             xus_tag(),
                             account2.address,
                             100,
@@ -572,7 +627,10 @@ fn create_test_cases() -> Vec<Test> {
         Test {
             name: "Upgrade diem version",
             run: |env: &mut testing::Env| {
-                let script = tmp_new_transaction_script_builders::encode_update_diem_version_script(0, 2);
+                let script = stdlib::encode_update_diem_version_script(
+                    0,
+                    DIEM_MAX_KNOWN_VERSION.major + 1,
+                );
                 let txn = env.create_txn(&env.root, script);
                 env.submit_and_wait(txn);
             },
@@ -630,10 +688,13 @@ fn create_test_cases() -> Vec<Test> {
                     result["transaction"]
                 );
 
-                let script = tmp_new_transaction_script_builders::encode_burn_with_amount_script_function(
+                let script = stdlib::encode_burn_with_amount_script_function(
                     xus_tag(), 0, env.dd.address, 100
                 );
-                let burn_txn = env.create_txn_by_payload(&env.tc, script);
+                let burn_txn = env.create_txn_by_payload(
+                    &env.tc,
+                    script,
+                );
                 let result = env.submit_and_wait(burn_txn);
                 let version = result["version"].as_u64().unwrap();
                 assert_eq!(
@@ -657,10 +718,10 @@ fn create_test_cases() -> Vec<Test> {
                         "type_arguments": [
                             "XUS"
                         ],
-                        "arguments": [
-                            "{U64: 0}",
-                            "{ADDRESS: 000000000000000000000000000000DD}",
-                            "{U64: 100}",
+                        "arguments_bcs": [
+                            "0000000000000000",
+                            "000000000000000000000000000000dd",
+                            "6400000000000000",
                         ],
                         "type": "script_function",
                         "module_address":"00000000000000000000000000000001",
@@ -679,8 +740,11 @@ fn create_test_cases() -> Vec<Test> {
                     env.create_txn(&env.dd, stdlib::encode_preburn_script(xus_tag(), 100));
                 env.submit_and_wait(txn);
 
-                let script = tmp_new_transaction_script_builders::encode_cancel_burn_with_amount_script_function(xus_tag(), env.dd.address, 100);
-                let cancel_burn_txn = env.create_txn_by_payload(&env.tc, script);
+                let script = stdlib::encode_cancel_burn_with_amount_script_function(xus_tag(), env.dd.address, 100);
+                let cancel_burn_txn = env.create_txn_by_payload(
+                    &env.tc,
+                    script,
+                );
                 let result = env.submit_and_wait(cancel_burn_txn);
                 let version = result["version"].as_u64().unwrap();
                 assert_eq!(
@@ -718,9 +782,9 @@ fn create_test_cases() -> Vec<Test> {
                         "type_arguments": [
                             "XUS"
                         ],
-                        "arguments": [
-                            "{ADDRESS: 000000000000000000000000000000DD}",
-                            "{U64: 100}",
+                        "arguments_bcs": [
+                            "000000000000000000000000000000dd",
+                            "6400000000000000",
                         ],
                         "type": "script_function",
                         "module_address":"00000000000000000000000000000001",

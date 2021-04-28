@@ -1,4 +1,4 @@
-module ApprovalGroup {
+module {{default}}::ApprovalGroup {
     use 0x1::Signature;
 
     struct ApprovalGroup has store {
@@ -58,7 +58,7 @@ module ApprovalGroup {
 }
 
 //! new-transaction
-module ColdWallet {
+module {{default}}::ColdWallet {
     use 0x1::XUS::XUS;
     use 0x1::Hash;
     use 0x1::BCS;
@@ -192,7 +192,8 @@ module ColdWallet {
 script {
 use {{default}}::ApprovalGroup;
 use {{default}}::ColdWallet;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     let genesis_group = ApprovalGroup::create(x"1234", x"5678", x"abc123");
     ColdWallet::create(account, genesis_group);
 }

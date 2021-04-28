@@ -23,12 +23,18 @@ use crate::{
     livevar_analysis::LiveVarAnalysisProcessor,
     options::ProverOptions,
     reaching_def_analysis::ReachingDefProcessor,
-    spec_translator::{SpecTranslator, TranslatedSpec},
-    stackless_bytecode::{AbortAction, AssignKind, AttrId, Bytecode, Label, Operation, PropKind},
+    stackless_bytecode::{
+        AbortAction, AssignKind, AttrId, Bytecode, HavocKind, Label, Operation, PropKind,
+    },
     usage_analysis, verification_analysis,
 };
-use move_model::ast::QuantKind;
-use std::collections::{BTreeMap, BTreeSet};
+use move_model::{
+    ast::QuantKind,
+    exp_generator::ExpGenerator,
+    model::NodeId,
+    spec_translator::{SpecTranslator, TranslatedSpec},
+};
+use std::collections::BTreeMap;
 
 const REQUIRES_FAILS_MESSAGE: &str = "precondition does not hold at this call";
 const ENSURES_FAILS_MESSAGE: &str = "post-condition does not hold";
@@ -113,7 +119,7 @@ impl FunctionTargetProcessor for SpecInstrumentationProcessor {
             verification_data = Instrumenter::run(&*options, targets, fun_env, verification_data);
             targets.insert_target_data(
                 &fun_env.get_qualified_id(),
-                verification_data.variant,
+                verification_data.variant.clone(),
                 verification_data,
             );
 
@@ -122,7 +128,11 @@ impl FunctionTargetProcessor for SpecInstrumentationProcessor {
                 let mut new_data =
                     data.fork(FunctionVariant::Verification(INCONSISTENCY_CHECK_VARIANT));
                 new_data = Instrumenter::run(&*options, targets, fun_env, new_data);
-                targets.insert_target_data(&fun_env.get_qualified_id(), new_data.variant, new_data);
+                targets.insert_target_data(
+                    &fun_env.get_qualified_id(),
+                    new_data.variant.clone(),
+                    new_data,
+                );
             }
         }
 
@@ -144,7 +154,7 @@ impl FunctionTargetProcessor for SpecInstrumentationProcessor {
 }
 
 struct Instrumenter<'a> {
-    options: &'a ProverOptions,
+    _options: &'a ProverOptions,
     builder: FunctionDataBuilder<'a>,
     spec: TranslatedSpec,
     ret_locals: Vec<TempIndex>,
@@ -185,7 +195,6 @@ impl<'a> Instrumenter<'a> {
         // Translate the specification. This deals with elimination of `old(..)` expressions,
         // as well as replaces `result_n` references with `ret_locals`.
         let spec = SpecTranslator::translate_fun_spec(
-            options,
             false,
             &mut builder,
             fun_env,
@@ -196,7 +205,7 @@ impl<'a> Instrumenter<'a> {
 
         // Create and run the instrumenter.
         let mut instrumenter = Instrumenter {
-            options,
+            _options: options,
             builder,
             spec,
             ret_locals,
@@ -241,10 +250,18 @@ impl<'a> Instrumenter<'a> {
             }
 
             // Inject well-formedness assumption for used memory.
-            for mem in self.get_used_memory() {
+            for mem in usage_analysis::get_used_memory_inst(&self.builder.get_target()).clone() {
+                // If this is native or intrinsic memory, skip this.
+                let struct_env = self
+                    .builder
+                    .global_env()
+                    .get_struct_qid(mem.to_qualified_id());
+                if struct_env.is_native_or_intrinsic() {
+                    continue;
+                }
                 let exp = self
                     .builder
-                    .mk_mem_quant_opt(QuantKind::Forall, mem, &mut |val| {
+                    .mk_inst_mem_quant_opt(QuantKind::Forall, &mem, &mut |val| {
                         Some(self.builder.mk_call(
                             &BOOL_TYPE,
                             ast::Operation::WellFormed,
@@ -269,12 +286,14 @@ impl<'a> Instrumenter<'a> {
             // For the verification variant, we generate post-conditions. Inject any state
             // save instructions needed for this.
             for (mem, label) in &self.spec.saved_memory {
+                let mem = mem.clone();
                 self.builder
-                    .emit_with(|attr_id| SaveMem(attr_id, *label, *mem));
+                    .emit_with(|attr_id| SaveMem(attr_id, *label, mem));
             }
             for (spec_var, label) in &self.spec.saved_spec_vars {
+                let spec_var = spec_var.clone();
                 self.builder
-                    .emit_with(|attr_id| SaveSpecVar(attr_id, *label, *spec_var));
+                    .emit_with(|attr_id| SaveSpecVar(attr_id, *label, spec_var));
             }
             let saved_params = self.spec.saved_params.clone();
             self.emit_save_for_old(&saved_params);
@@ -292,10 +311,6 @@ impl<'a> Instrumenter<'a> {
         if self.can_abort {
             self.generate_abort_block();
         }
-    }
-
-    fn get_used_memory(&self) -> BTreeSet<QualifiedId<StructId>> {
-        usage_analysis::get_used_memory(&self.builder.get_target()).clone()
     }
 
     fn instrument_bytecode(&mut self, bc: Bytecode) {
@@ -378,44 +393,52 @@ impl<'a> Instrumenter<'a> {
     ) {
         use Bytecode::*;
         use PropKind::*;
+        let targs = &targs; // linter does not allow `ref targs` parameter
 
         let env = self.builder.global_env();
 
         let callee_env = env.get_module(mid).into_function(fid);
         let callee_opaque = callee_env.is_opaque();
         let mut callee_spec = SpecTranslator::translate_fun_spec(
-            self.options,
             true,
             &mut self.builder,
             &callee_env,
-            &targs,
+            targs,
             Some(&srcs),
             &dests,
         );
 
         self.builder.set_loc_from_attr(id);
 
-        let opaque_display =
-            if callee_opaque && (self.options.dump_bytecode || self.options.stable_test_output) {
-                // Add a debug comment about the original function call to easier identify
-                // the opaque call in dumped bytecode.
-                let bc = Call(
-                    id,
-                    dests.clone(),
-                    Operation::Function(mid, fid, targs.clone()),
-                    srcs.clone(),
-                    aa,
-                );
-                let bc_display = bc
-                    .display(&self.builder.get_target(), &Default::default())
-                    .to_string();
-                self.builder
-                    .set_next_debug_comment(format!(">> opaque call: {}", bc_display));
-                self.builder.emit_with(Nop);
-                Some(bc_display)
-            } else {
-                None
-            };
+        let opaque_display = if callee_opaque {
+            // Add a debug comment about the original function call to easier identify
+            // the opaque call in dumped bytecode.
+            let bc = Call(
+                id,
+                dests.clone(),
+                Operation::Function(mid, fid, targs.clone()),
+                srcs.clone(),
+                aa,
+            );
+            let bc_display = bc
+                .display(&self.builder.get_target(), &Default::default())
+                .to_string();
+            self.builder
+                .set_next_debug_comment(format!(">> opaque call: {}", bc_display));
+            self.builder.emit_with(Nop);
+            Some(bc_display)
+        } else {
+            None
+        };
+
+        // Emit all expression debug traces.
+        for (node_id, exp) in std::mem::take(&mut callee_spec.debug_traces) {
+            let exp = self.instantiate_exp(exp, targs);
+            let temp = self.builder.emit_let(exp).0;
+
+            self.builder
+                .emit_with(|id| Call(id, vec![], Operation::TraceExp(node_id), vec![temp], None));
+        }
 
         // Emit pre conditions if this is the verification variant or if the callee
         // is opaque. For inlined callees outside of verification entry points, we skip
@@ -423,6 +446,7 @@ impl<'a> Instrumenter<'a> {
         // function.
         if self.is_verified() || callee_opaque {
             for (loc, cond) in callee_spec.pre_conditions(&self.builder) {
+                let cond = self.instantiate_exp(cond, targs);
                 // Determine whether we want to emit this as an assertion or an assumption.
                 let prop_kind = match self.builder.data.variant {
                     FunctionVariant::Verification(..) => {
@@ -442,6 +466,7 @@ impl<'a> Instrumenter<'a> {
         if self.is_verified() {
             let loc = self.builder.get_loc(id);
             for (_, cond) in &callee_spec.modifies {
+                let cond = &self.instantiate_exp(cond.clone(), targs);
                 let env = self.builder.global_env();
                 let rty = &env.get_node_instantiation(cond.node_id())[0];
                 let (mid, sid, targs) = rty.require_struct();
@@ -454,7 +479,7 @@ impl<'a> Instrumenter<'a> {
             self.builder.emit(Call(
                 id,
                 dests,
-                Operation::Function(mid, fid, targs),
+                Operation::Function(mid, fid, targs.clone()),
                 srcs,
                 Some(AbortAction(self.abort_label, self.abort_local)),
             ));
@@ -464,9 +489,13 @@ impl<'a> Instrumenter<'a> {
             // to in aborts conditions, and must be initialized before evaluating those.
             self.emit_save_for_old(&callee_spec.saved_params);
 
+            let callee_aborts_if_is_partial =
+                callee_env.is_pragma_true(ABORTS_IF_IS_PARTIAL_PRAGMA, || false);
+
             // Translate the abort condition. If the abort_cond_temp_opt is None, it indicates
             // that the abort condition is known to be false, so we can skip the abort handling.
-            let (abort_cond_temp_opt, code_cond) = self.generate_abort_opaque_cond(&callee_spec);
+            let (abort_cond_temp_opt, code_cond) =
+                self.generate_abort_opaque_cond(callee_aborts_if_is_partial, &callee_spec, targs);
             if let Some(abort_cond_temp) = abort_cond_temp_opt {
                 let abort_local = self.abort_local;
                 let abort_label = self.abort_label;
@@ -488,14 +517,17 @@ impl<'a> Instrumenter<'a> {
 
             // Emit memory state saves
             for (mem, label) in std::mem::take(&mut callee_spec.saved_memory) {
+                let mem = mem.instantiate(targs);
                 self.builder.emit_with(|id| SaveMem(id, label, mem));
             }
             for (var, label) in std::mem::take(&mut callee_spec.saved_spec_vars) {
+                let var = var.instantiate(targs);
                 self.builder.emit_with(|id| SaveSpecVar(id, label, var));
             }
 
             // Emit modifies properties which havoc memory at the modified location.
             for (_, modifies) in std::mem::take(&mut callee_spec.modifies) {
+                let modifies = self.instantiate_exp(modifies, targs);
                 self.builder.emit_with(|id| Prop(id, Modifies, modifies));
             }
 
@@ -519,8 +551,15 @@ impl<'a> Instrumenter<'a> {
                 })
                 .collect_vec();
             for src in &mut_srcs {
-                self.builder
-                    .emit_with(|id| Call(id, vec![], Operation::Havoc, vec![*src], None));
+                self.builder.emit_with(|id| {
+                    Call(
+                        id,
+                        vec![],
+                        Operation::Havoc(HavocKind::MutationValue),
+                        vec![*src],
+                        None,
+                    )
+                });
             }
 
             // Emit placeholders for assuming well-formedness of return values and mutable ref
@@ -536,11 +575,15 @@ impl<'a> Instrumenter<'a> {
 
             // Emit post conditions as assumptions.
             for (_, cond) in std::mem::take(&mut callee_spec.post) {
+                let cond = self.instantiate_exp(cond, targs);
                 self.builder.emit_with(|id| Prop(id, Assume, cond));
             }
 
             // Emit the events in the `emits` specs of the callee.
             for (_, msg, handle, cond) in std::mem::take(&mut callee_spec.emits) {
+                let msg = self.instantiate_exp(msg, targs);
+                let handle = self.instantiate_exp(handle, targs);
+                let cond = cond.map(|e| self.instantiate_exp(e, targs));
                 let temp_msg = self.builder.emit_let(msg).0;
                 let temp_handle = self.builder.emit_let(handle).0;
                 let mut temp_list = vec![temp_msg, temp_handle];
@@ -641,12 +684,10 @@ impl<'a> Instrumenter<'a> {
     /// is known to be false.
     fn generate_abort_opaque_cond(
         &mut self,
+        is_partial: bool,
         spec: &TranslatedSpec,
+        targs: &[Type],
     ) -> (Option<TempIndex>, Option<Exp>) {
-        let is_partial = self
-            .builder
-            .fun_env
-            .is_pragma_true(ABORTS_IF_IS_PARTIAL_PRAGMA, || false);
         let aborts_cond = if is_partial {
             None
         } else {
@@ -657,6 +698,7 @@ impl<'a> Instrumenter<'a> {
                 return (None, None);
             }
             // Introduce a temporary to hold the value of the aborts condition.
+            let cond = self.instantiate_exp(cond, targs);
             self.builder.emit_let(cond).0
         } else {
             // Introduce a havoced temporary to hold an arbitrary value for the aborts
@@ -666,6 +708,7 @@ impl<'a> Instrumenter<'a> {
         let aborts_code_cond = if spec.has_aborts_code_specs() {
             let actual_code = self.builder.mk_temporary(self.abort_local);
             spec.aborts_code_condition(&self.builder, &actual_code)
+                .map(|e| self.instantiate_exp(e, targs))
         } else {
             None
         };
@@ -683,6 +726,13 @@ impl<'a> Instrumenter<'a> {
         self.builder.emit_with(|id| Label(id, ret_label));
 
         if self.is_verified() {
+            // Emit all expression debug traces.
+            for (node_id, exp) in std::mem::take(&mut self.spec.debug_traces) {
+                let temp = self.builder.emit_let(exp).0;
+                self.builder.emit_with(|id| {
+                    Call(id, vec![], Operation::TraceExp(node_id), vec![temp], None)
+                });
+            }
             // Emit the negation of all aborts conditions.
             for (loc, abort_cond, _) in &self.spec.aborts {
                 self.builder
@@ -764,6 +814,20 @@ impl<'a> Instrumenter<'a> {
                 .emit_with(|id| Bytecode::Prop(id, PropKind::Assert, can_modify));
         }
     }
+
+    fn instantiate_exp(&self, exp: Exp, targs: &[Type]) -> Exp {
+        exp.rewrite_node_id(&mut |id| self.instantiate_node(id, targs))
+    }
+
+    fn instantiate_node(&self, id: NodeId, targs: &[Type]) -> NodeId {
+        let env = self.builder.global_env();
+        let loc = env.get_node_loc(id);
+        let ty = env.get_node_type(id).instantiate(targs);
+        let targs = Type::instantiate_vec(env.get_node_instantiation(id), targs);
+        let new_id = env.new_node(loc, ty);
+        env.set_node_instantiation(new_id, targs);
+        new_id
+    }
 }
 
 //  ================================================================================================
@@ -790,13 +854,13 @@ fn check_caller_callee_modifies_relation(
     if fun_env.is_native() || fun_env.is_intrinsic() {
         return;
     }
-    let caller_func_target = targets.get_target(&fun_env, FunctionVariant::Baseline);
+    let caller_func_target = targets.get_target(&fun_env, &FunctionVariant::Baseline);
     for callee in fun_env.get_called_functions() {
         let callee_fun_env = env.get_function(callee);
         if callee_fun_env.is_native() || callee_fun_env.is_intrinsic() {
             continue;
         }
-        let callee_func_target = targets.get_target(&callee_fun_env, FunctionVariant::Baseline);
+        let callee_func_target = targets.get_target(&callee_fun_env, &FunctionVariant::Baseline);
         let callee_modified_memory = usage_analysis::get_modified_memory(&callee_func_target);
         for target in caller_func_target.get_modify_targets().keys() {
             if callee_modified_memory.contains(target)
@@ -826,7 +890,7 @@ fn check_opaque_modifies_completeness(
     targets: &FunctionTargetsHolder,
     fun_env: &FunctionEnv,
 ) {
-    let target = targets.get_target(fun_env, FunctionVariant::Baseline);
+    let target = targets.get_target(fun_env, &FunctionVariant::Baseline);
     if !target.is_opaque() {
         return;
     }
@@ -834,16 +898,17 @@ fn check_opaque_modifies_completeness(
     // a modifies clause. Otherwise we could introduce unsoundness.
     // TODO: we currently except Event::EventHandle from this, because this is treated as
     //   an immutable reference. We should find a better way how to deal with event handles.
-    for mem in usage_analysis::get_modified_memory(&target) {
+    for mem in usage_analysis::get_modified_memory_inst(&target) {
         if env.is_wellknown_event_handle_type(&Type::Struct(mem.module_id, mem.id, vec![])) {
             continue;
         }
-        if !target.get_modify_targets().contains_key(mem) {
+        let found = target.get_modify_ids().iter().any(|id| mem == id);
+        if !found {
             let loc = fun_env.get_spec_loc();
             env.error(&loc,
             &format!("function `{}` is opaque but its specification does not have a modifies clause for `{}`",
                 fun_env.get_full_name_str(),
-                env.get_module(mem.module_id).into_struct(mem.id).get_full_name_str())
+                env.display(mem))
             )
         }
     }

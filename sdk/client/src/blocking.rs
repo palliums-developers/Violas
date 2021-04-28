@@ -9,17 +9,20 @@ use super::{
 };
 use crate::{
     error::WaitForTransactionError,
+    move_deserialize::{self, Event},
     views::{
-        AccountStateWithProofView, AccountView, CurrencyInfoView, EventView, MetadataView,
-        StateProofView, TransactionView,
+        AccountStateWithProofView, AccountView, CurrencyInfoView, EventView, EventWithProofView,
+        MetadataView, StateProofView, TransactionView, TransactionsWithProofsView,
     },
     Error, Result, Retry, State,
 };
-use diem_crypto::hash::CryptoHash;
+use diem_crypto::{hash::CryptoHash, HashValue};
 use diem_types::{
     account_address::AccountAddress,
+    event::EventKey,
     transaction::{SignedTransaction, Transaction},
 };
+use move_core_types::move_resource::MoveResource;
 use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 
@@ -57,14 +60,22 @@ impl BlockingClient {
         timeout: Option<Duration>,
         delay: Option<Duration>,
     ) -> Result<Response<TransactionView>, WaitForTransactionError> {
-        self.wait_for_transaction(
+        let response = self.wait_for_transaction(
             txn.sender(),
             txn.sequence_number(),
             txn.expiration_timestamp_secs(),
-            &Transaction::UserTransaction(txn.clone()).hash().to_hex(),
+            Transaction::UserTransaction(txn.clone()).hash(),
             timeout,
             delay,
-        )
+        )?;
+
+        if !response.inner().vm_status.is_executed() {
+            return Err(WaitForTransactionError::TransactionExecutionFailed(
+                response.into_inner(),
+            ));
+        }
+
+        Ok(response)
     }
 
     pub fn wait_for_transaction(
@@ -72,7 +83,7 @@ impl BlockingClient {
         address: AccountAddress,
         seq: u64,
         expiration_time_secs: u64,
-        txn_hash: &str,
+        txn_hash: HashValue,
         timeout: Option<Duration>,
         delay: Option<Duration>,
     ) -> Result<Response<TransactionView>, WaitForTransactionError> {
@@ -85,13 +96,10 @@ impl BlockingClient {
                 .get_account_transaction(address, seq, true)
                 .map_err(WaitForTransactionError::GetTransactionError)?;
             if let (Some(txn), state) = txn_resp.into_parts() {
-                if txn.hash.to_hex() != txn_hash {
+                if txn.hash != txn_hash {
                     return Err(WaitForTransactionError::TransactionHashMismatchError(txn));
                 }
-                match txn.vm_status {
-                    diem_json_rpc_types::views::VMStatusView::Executed => {}
-                    _ => return Err(WaitForTransactionError::TransactionExecutionFailed(txn)),
-                }
+
                 return Ok(Response::new(txn, state));
             }
 
@@ -212,7 +220,7 @@ impl BlockingClient {
         &self,
         start_version: u64,
         limit: u64,
-    ) -> Result<Response<()>> {
+    ) -> Result<Response<Option<TransactionsWithProofsView>>> {
         self.send(MethodRequest::get_transactions_with_proofs(
             start_version,
             limit,
@@ -224,8 +232,42 @@ impl BlockingClient {
         key: &str,
         start_seq: u64,
         limit: u64,
-    ) -> Result<Response<()>> {
+    ) -> Result<Response<Vec<EventWithProofView>>> {
         self.send(MethodRequest::get_events_with_proofs(key, start_seq, limit))
+    }
+
+    /// Return the events of type `T` that have been emitted to `event_key` since `start_seq`, with a max of `limit`
+    /// results
+    /// Returns an empty vector if there are no such event
+    /// The type `T` must match the event types associated with `event_key`
+    pub fn get_deserialized_events<T: MoveResource + DeserializeOwned>(
+        &self,
+        event_key: &EventKey,
+        start_seq: u64,
+        limit: u64,
+    ) -> Result<Response<Vec<Event<T>>>> {
+        let (events, state) = self
+            .get_events_with_proofs(&hex::encode(event_key.as_bytes()), start_seq, limit)?
+            .into_parts();
+        Ok(Response::new(
+            move_deserialize::get_events::<T>(events)?,
+            state,
+        ))
+    }
+
+    /// Deserialize and return the resource value of type `T` stored under `address`
+    /// Returns None if there is no such value
+    pub fn get_deserialized_resource<T: MoveResource + DeserializeOwned>(
+        &self,
+        address: AccountAddress,
+    ) -> Result<Response<Option<T>>> {
+        let (account, state) = self
+            .get_account_state_with_proof(address, None, None)?
+            .into_parts();
+        Ok(Response::new(
+            move_deserialize::get_resource(account)?,
+            state,
+        ))
     }
 
     //

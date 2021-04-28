@@ -3,25 +3,25 @@
 
 #![forbid(unsafe_code)]
 
-use anyhow::anyhow;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use itertools::Itertools;
 #[allow(unused_imports)]
 use log::warn;
+use std::collections::BTreeSet;
 
 use builder::module_builder::ModuleBuilder;
+use move_binary_format::{
+    access::ModuleAccess,
+    file_format::{CompiledModule, FunctionDefinitionIndex, StructDefinitionIndex},
+};
 use move_lang::{
     compiled_unit::{self, CompiledUnit},
     errors::Errors,
     expansion::ast::{ModuleDefinition, Program},
     move_continue_up_to, move_parse,
     parser::ast::ModuleIdent,
-    shared::{unique_map::UniqueMap, Address},
+    shared::{unique_map::UniqueMap, Address, CompilationEnv, Flags},
     Pass as MovePass, PassResult as MovePassResult,
-};
-use vm::{
-    access::ModuleAccess,
-    file_format::{CompiledModule, FunctionDefinitionIndex, StructDefinitionIndex},
 };
 
 use crate::{
@@ -33,63 +33,156 @@ use crate::{
 pub mod ast;
 mod builder;
 pub mod code_writer;
+pub mod exp_generator;
 pub mod exp_rewriter;
 pub mod model;
 pub mod pragmas;
+pub mod spec_translator;
 pub mod symbol;
 pub mod ty;
 
 // =================================================================================================
 // Entry Point
 
+/// Build the move model. This collects transitive dependencies for move sources
+/// from the provided directory list.
 pub fn run_model_builder(
-    target_sources: Vec<String>,
-    other_sources: Vec<String>,
-    address_opt: Option<&str>,
+    move_sources: &[String],
+    deps_dir: &[String],
 ) -> anyhow::Result<GlobalEnv> {
-    let address_opt = address_opt
-        .map(Address::parse_str)
-        .transpose()
-        .map_err(|s| anyhow!(s))?;
-    // Construct all sources from targets and others, as we need bytecode for all of them.
-    let mut all_sources = target_sources;
-    all_sources.extend(other_sources.clone());
     let mut env = GlobalEnv::new();
-    // Parse the program
-    let (files, pprog_and_comments_res) = move_parse(&all_sources, &[], address_opt, None)?;
+
+    // Step 1: parse the program to get comments and a separation of targets and dependencies.
+    let (files, pprog_and_comments_res) = move_parse(
+        move_sources,
+        deps_dir,
+        None,
+        /* sources_shadow_deps */ true,
+    )?;
+    let (comment_map, parsed_prog) = match pprog_and_comments_res {
+        Err(errors) => {
+            // Add source files so that the env knows how to translate locations of parse errors
+            for fname in files.keys().sorted() {
+                let fsrc = &files[fname];
+                env.add_source(fname, fsrc, /* is_dep */ false);
+            }
+            add_move_lang_errors(&mut env, errors);
+            return Ok(env);
+        }
+        Ok(res) => res,
+    };
+    // Add source files for targets and dependencies
+    let dep_sources: BTreeSet<_> = parsed_prog
+        .lib_definitions
+        .iter()
+        .map(|def| def.file())
+        .collect();
     for fname in files.keys().sorted() {
         let fsrc = &files[fname];
-        env.add_source(fname, fsrc, other_sources.contains(&fname.to_string()));
+        env.add_source(fname, fsrc, dep_sources.contains(fname));
     }
     // Add any documentation comments found by the Move compiler to the env.
-    let (comment_map, addr_opt, parsed_prog) = match pprog_and_comments_res {
+    for (fname, documentation) in comment_map {
+        let file_id = env.get_file_id(fname).expect("file name defined");
+        env.add_documentation(file_id, documentation);
+    }
+
+    // Step 2: parse all sources in targets and dependencies, prepare for selective compilation.
+    let all_sources: Vec<_> = files
+        .into_iter()
+        .map(|(fname, _)| fname.to_owned())
+        .collect();
+    // Run the compiler up to expansion
+    let (_, pprog_and_comments_res) = move_parse(&all_sources, &[], None, false)?;
+    let (_, parsed_prog) = match pprog_and_comments_res {
         Err(errors) => {
             add_move_lang_errors(&mut env, errors);
             return Ok(env);
         }
         Ok(res) => res,
     };
-    for (fname, documentation) in comment_map {
-        let file_id = env.get_file_id(fname).expect("file name defined");
-        env.add_documentation(file_id, documentation);
-    }
-    // Run the compiler up to expansion and clone a copy of the expansion program ast
-    let (expansion_ast, expansion_result) = match move_continue_up_to(
+    let mut compilation_env = CompilationEnv::new(Flags::empty());
+    let expansion_ast = match move_continue_up_to(
+        &mut compilation_env,
         None,
-        MovePassResult::Parser(addr_opt, parsed_prog),
+        MovePassResult::Parser(parsed_prog),
         MovePass::Expansion,
     ) {
         Err(errors) => {
             add_move_lang_errors(&mut env, errors);
             return Ok(env);
         }
-        Ok(MovePassResult::Expansion(eprog, eerrors)) => {
-            (eprog.clone(), MovePassResult::Expansion(eprog, eerrors))
+        Ok(MovePassResult::Expansion(eprog)) => eprog,
+        Ok(_) => unreachable!(),
+    };
+    // Extract the module/script closure
+    let mut visited_modules = BTreeSet::new();
+    let mut selective_files = BTreeSet::new();
+    for (mident, mdef) in expansion_ast.modules.key_cloned_iter() {
+        let src_file = mdef.loc.file();
+        if !dep_sources.contains(src_file) {
+            selective_files.insert(src_file.to_owned());
+            collect_related_modules_recursive(mident, &expansion_ast.modules, &mut visited_modules);
         }
+    }
+    for (_, sdef) in expansion_ast.scripts {
+        let src_file = sdef.loc.file();
+        if !dep_sources.contains(src_file) {
+            selective_files.insert(src_file.to_owned());
+            for neighbor in sdef.immediate_neighbors {
+                collect_related_modules_recursive(
+                    neighbor.into_module_ident(),
+                    &expansion_ast.modules,
+                    &mut visited_modules,
+                );
+            }
+        }
+    }
+    for mident in visited_modules {
+        selective_files.insert(
+            expansion_ast
+                .modules
+                .get(&mident)
+                .unwrap()
+                .loc
+                .file()
+                .to_owned(),
+        );
+    }
+
+    // Step 3: selective compilation.
+    let selective_sources: Vec<_> = selective_files.into_iter().collect();
+
+    // Run the compiler up to expansion and clone a copy of the expansion program ast
+    let (_, pprog_and_comments_res) = move_parse(&selective_sources, &[], None, false)?;
+    let (_, parsed_prog) = match pprog_and_comments_res {
+        Err(errors) => {
+            add_move_lang_errors(&mut env, errors);
+            return Ok(env);
+        }
+        Ok(res) => res,
+    };
+    let mut compilation_env = CompilationEnv::new(Flags::empty());
+    let (expansion_ast, expansion_result) = match move_continue_up_to(
+        &mut compilation_env,
+        None,
+        MovePassResult::Parser(parsed_prog),
+        MovePass::Expansion,
+    ) {
+        Err(errors) => {
+            add_move_lang_errors(&mut env, errors);
+            return Ok(env);
+        }
+        Ok(MovePassResult::Expansion(eprog)) => (eprog.clone(), MovePassResult::Expansion(eprog)),
         Ok(_) => unreachable!(),
     };
     // Run the compiler fully to the compiled units
-    let units = match move_continue_up_to(None, expansion_result, MovePass::Compilation) {
+    let units = match move_continue_up_to(
+        &mut compilation_env,
+        None,
+        expansion_result,
+        MovePass::Compilation,
+    ) {
         Err(errors) => {
             add_move_lang_errors(&mut env, errors);
             return Ok(env);
@@ -110,10 +203,32 @@ pub fn run_model_builder(
     Ok(env)
 }
 
+fn collect_related_modules_recursive(
+    mident: ModuleIdent,
+    modules: &UniqueMap<ModuleIdent, ModuleDefinition>,
+    visited: &mut BTreeSet<ModuleIdent>,
+) {
+    if visited.contains(&mident) {
+        return;
+    }
+    let mdef = modules.get(&mident).unwrap();
+    let deps: BTreeSet<_> = mdef
+        .immediate_neighbors
+        .iter()
+        .map(|neighbor| neighbor.clone().into_module_ident())
+        .collect();
+    visited.insert(mident);
+    for next_mident in deps {
+        collect_related_modules_recursive(next_mident, modules, visited);
+    }
+}
+
 /// Build a `GlobalEnv` from a collection of `CompiledModule`'s. The `modules` list must be
 /// topologically sorted by the dependency relation (i.e., a child node in the dependency graph
 /// should appear earlier in the vector than its parents).
-pub fn run_bytecode_model_builder(modules: Vec<CompiledModule>) -> anyhow::Result<GlobalEnv> {
+pub fn run_bytecode_model_builder<'a>(
+    modules: impl IntoIterator<Item = &'a CompiledModule>,
+) -> anyhow::Result<GlobalEnv> {
     let mut env = GlobalEnv::new();
     for (i, m) in modules.into_iter().enumerate() {
         let id = m.self_id();
@@ -123,29 +238,25 @@ pub fn run_bytecode_model_builder(modules: Vec<CompiledModule>) -> anyhow::Resul
         let mut module_data = ModuleData::stub(module_name.clone(), module_id, m.clone());
 
         // add functions
-        for (def_idx, def) in m.function_defs().iter().enumerate() {
+        for (i, def) in m.function_defs().iter().enumerate() {
+            let def_idx = FunctionDefinitionIndex(i as u16);
             let name = m.identifier_at(m.function_handle_at(def.function).name);
             let symbol = env.symbol_pool().make(name.as_str());
-            let data = FunctionData::stub(
-                symbol,
-                FunctionDefinitionIndex(def_idx as u16),
-                def.function,
-            );
-            module_data.function_data.insert(FunId::new(symbol), data);
+            let fun_id = FunId::new(symbol);
+            let data = FunctionData::stub(symbol, def_idx, def.function);
+            module_data.function_data.insert(fun_id, data);
+            module_data.function_idx_to_id.insert(def_idx, fun_id);
         }
 
         // add structs
-        for (def_idx, def) in m.struct_defs().iter().enumerate() {
+        for (i, def) in m.struct_defs().iter().enumerate() {
+            let def_idx = StructDefinitionIndex(i as u16);
             let name = m.identifier_at(m.struct_handle_at(def.struct_handle).name);
             let symbol = env.symbol_pool().make(name.as_str());
-            let data = env.create_struct_data(
-                &m,
-                StructDefinitionIndex(def_idx as u16),
-                symbol,
-                Loc::default(),
-                Spec::default(),
-            );
-            module_data.struct_data.insert(StructId::new(symbol), data);
+            let struct_id = StructId::new(symbol);
+            let data = env.create_struct_data(&m, def_idx, symbol, Loc::default(), Spec::default());
+            module_data.struct_data.insert(struct_id, data);
+            module_data.struct_idx_to_id.insert(def_idx, struct_id);
         }
 
         env.module_data.push(module_data);
@@ -201,7 +312,9 @@ fn run_spec_checker(env: &mut GlobalEnv, units: Vec<CompiledUnit>, mut eprog: Pr
                     function_info,
                 } => {
                     let move_lang::expansion::ast::Script {
+                        attributes,
                         loc,
+                        immediate_neighbors,
                         function_name,
                         constants,
                         function,
@@ -229,8 +342,10 @@ fn run_spec_checker(env: &mut GlobalEnv, units: Vec<CompiledUnit>, mut eprog: Pr
                     let mut functions = UniqueMap::new();
                     functions.add(function_name, function).unwrap();
                     let expanded_module = ModuleDefinition {
+                        attributes,
                         loc,
                         dependency_order: usize::MAX,
+                        immediate_neighbors,
                         is_source_module: true,
                         friends: UniqueMap::new(),
                         structs: UniqueMap::new(),

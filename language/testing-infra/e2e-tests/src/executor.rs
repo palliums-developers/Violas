@@ -9,10 +9,10 @@ use crate::{
     golden_outputs::GoldenOutputs,
     keygen::KeyGen,
 };
-use compiled_stdlib::{
-    legacy::transaction_scripts::LegacyStdlibScript, stdlib_modules, StdLibModules, StdLibOptions,
-};
 use diem_crypto::HashValue;
+use diem_framework_releases::{
+    current_module_blobs, current_modules, legacy::transaction_scripts::LegacyStdlibScript,
+};
 use diem_state_view::StateView;
 use diem_types::{
     access_path::AccessPath,
@@ -31,12 +31,11 @@ use diem_vm::{
     VMValidator,
 };
 use move_core_types::{
-    gas_schedule::{GasAlgebra, GasUnits},
     identifier::Identifier,
     language_storage::{ModuleId, TypeTag},
 };
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM};
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
+use move_vm_types::gas_schedule::GasStatus;
 
 static RNG_SEED: [u8; 32] = [9u8; 32];
 
@@ -89,7 +88,7 @@ impl FakeExecutor {
 
     pub fn allowlist_genesis() -> Self {
         Self::custom_genesis(
-            stdlib_modules(StdLibOptions::Compiled).bytes_opt.unwrap(),
+            current_module_blobs(),
             None,
             VMPublishingOption::locked(LegacyStdlibScript::allowlist()),
         )
@@ -103,11 +102,7 @@ impl FakeExecutor {
             panic!("Allowlisted transactions are not supported as a publishing option")
         }
 
-        Self::custom_genesis(
-            stdlib_modules(StdLibOptions::Compiled).bytes_opt.unwrap(),
-            None,
-            publishing_options,
-        )
+        Self::custom_genesis(current_module_blobs(), None, publishing_options)
     }
 
     /// Creates an executor in which no genesis state has been applied yet.
@@ -131,13 +126,10 @@ impl FakeExecutor {
     /// initialization done.
     pub fn stdlib_only_genesis() -> Self {
         let mut genesis = Self::no_genesis();
-        let StdLibModules {
-            bytes_opt,
-            compiled_modules,
-        } = stdlib_modules(StdLibOptions::Compiled);
-        let bytes = bytes_opt.unwrap();
-        assert!(bytes.len() == compiled_modules.len());
-        for (module, bytes) in compiled_modules.iter().zip(bytes) {
+        let blobs = current_module_blobs();
+        let modules = current_modules();
+        assert!(blobs.len() == modules.len());
+        for (module, bytes) in modules.iter().zip(blobs) {
             let id = module.self_id();
             genesis.add_module(&id, bytes.to_vec());
         }
@@ -360,8 +352,7 @@ impl FakeExecutor {
         args: Vec<Vec<u8>>,
     ) {
         let write_set = {
-            let cost_table = zero_cost_schedule();
-            let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(100_000_000));
+            let mut gas_status = GasStatus::new_unmetered();
             let vm = MoveVM::new();
             let remote_view = RemoteStorage::new(&self.data_store);
             let mut session = vm.new_session(&remote_view);
@@ -372,7 +363,7 @@ impl FakeExecutor {
                     &Self::name(function_name),
                     type_params,
                     args,
-                    &mut cost_strategy,
+                    &mut gas_status,
                     &log_context,
                 )
                 .unwrap_or_else(|e| {
@@ -398,8 +389,7 @@ impl FakeExecutor {
         type_params: Vec<TypeTag>,
         args: Vec<Vec<u8>>,
     ) -> Result<WriteSet, VMStatus> {
-        let cost_table = zero_cost_schedule();
-        let mut cost_strategy = CostStrategy::system(&cost_table, GasUnits::new(100_000_000));
+        let mut gas_status = GasStatus::new_unmetered();
         let vm = MoveVM::new();
         let remote_view = RemoteStorage::new(&self.data_store);
         let mut session = vm.new_session(&remote_view);
@@ -410,7 +400,7 @@ impl FakeExecutor {
                 &Self::name(function_name),
                 type_params,
                 args,
-                &mut cost_strategy,
+                &mut gas_status,
                 &log_context,
             )
             .map_err(|e| e.into_vm_status())?;

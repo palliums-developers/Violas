@@ -1,4 +1,4 @@
-module M {
+module {{default}}::M {
     use 0x1::Event;
 
     struct MyEvent<T1, T2> has copy, drop, store { b: bool }
@@ -15,7 +15,8 @@ module M {
 script {
 use {{default}}::M;
 
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     M::emit_event<bool, u64>(account);
 }
 }

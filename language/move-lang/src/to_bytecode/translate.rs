@@ -13,16 +13,16 @@ use crate::{
     },
     naming::ast::{BuiltinTypeName_, TParam},
     parser::ast::{
-        Ability, Ability_, BinOp, BinOp_, ConstantName, Field, FunctionName, FunctionVisibility,
-        ModuleIdent, StructName, UnaryOp, UnaryOp_, Var,
+        Ability, Ability_, BinOp, BinOp_, ConstantName, Field, FunctionName, ModuleIdent,
+        StructName, UnaryOp, UnaryOp_, Var, Visibility,
     },
     shared::{unique_map::UniqueMap, *},
     FullyCompiledProgram,
 };
 use bytecode_source_map::source_map::SourceMap;
+use move_binary_format::file_format as F;
 use move_core_types::account_address::AccountAddress as MoveAddress;
 use move_ir_types::{ast as IR, location::*};
-use move_vm::file_format as F;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 type CollectedInfos = UniqueMap<FunctionName, CollectedInfo>;
@@ -32,6 +32,7 @@ type CollectedInfo = (
 );
 
 fn extract_decls(
+    _compilation_env: &mut CompilationEnv,
     pre_compiled_lib: Option<&FullyCompiledProgram>,
     prog: &G::Program,
 ) -> (
@@ -101,13 +102,13 @@ fn extract_decls(
 //**************************************************************************************************
 
 pub fn program(
+    compilation_env: &mut CompilationEnv,
     pre_compiled_lib: Option<&FullyCompiledProgram>,
     prog: G::Program,
-) -> Result<Vec<CompiledUnit>, Errors> {
+) -> Vec<CompiledUnit> {
     let mut units = vec![];
-    let mut errors = vec![];
 
-    let (orderings, sdecls, fdecls) = extract_decls(pre_compiled_lib, &prog);
+    let (orderings, sdecls, fdecls) = extract_decls(compilation_env, pre_compiled_lib, &prog);
     let G::Program {
         modules: gmodules,
         scripts: gscripts,
@@ -119,19 +120,21 @@ pub fn program(
         .collect::<Vec<_>>();
     source_modules.sort_by_key(|(_, mdef)| mdef.dependency_order);
     for (m, mdef) in source_modules {
-        match module(m, mdef, &orderings, &sdecls, &fdecls) {
+        match module(compilation_env, m, mdef, &orderings, &sdecls, &fdecls) {
             Ok(unit) => units.push(unit),
-            Err(err) => errors.push(err),
+            Err(err) => compilation_env.add_error(err),
         }
     }
     for (key, s) in gscripts {
         let G::Script {
-            loc: _,
+            attributes: _attributes,
+            loc: _loc,
             constants,
             function_name,
             function,
         } = s;
         match script(
+            compilation_env,
             key,
             constants,
             function_name,
@@ -141,14 +144,14 @@ pub fn program(
             &fdecls,
         ) {
             Ok(unit) => units.push(unit),
-            Err(err) => errors.push(err),
+            Err(err) => compilation_env.add_error(err),
         }
     }
-    check_errors(errors)?;
-    Ok(units)
+    units
 }
 
 fn module(
+    _compilation_env: &mut CompilationEnv,
     ident: ModuleIdent,
     mdef: G::ModuleDefinition,
     dependency_orderings: &HashMap<ModuleIdent, usize>,
@@ -223,6 +226,7 @@ fn module(
 }
 
 fn script(
+    _compilation_env: &mut CompilationEnv,
     key: String,
     constants: UniqueMap<ConstantName, G::Constant>,
     name: FunctionName,
@@ -393,6 +397,7 @@ fn struct_def(
     sdef: H::StructDefinition,
 ) -> IR::StructDefinition {
     let H::StructDefinition {
+        attributes: _attributes,
         abilities: abs,
         type_parameters: tys,
         fields,
@@ -472,6 +477,7 @@ fn function(
     fdef: G::Function,
 ) -> ((IR::FunctionName, IR::Function), CollectedInfo) {
     let G::Function {
+        attributes: _attributes,
         visibility: v,
         signature,
         acquires,
@@ -489,9 +495,17 @@ fn function(
         G::FunctionBody_::Defined {
             locals,
             start,
+            loop_heads,
             blocks,
         } => {
-            let (locals, code) = function_body(context, parameters.clone(), locals, start, blocks);
+            let (locals, code) = function_body(
+                context,
+                parameters.clone(),
+                locals,
+                loop_heads,
+                start,
+                blocks,
+            );
             IR::FunctionBody::Bytecode { locals, code }
         }
     };
@@ -510,12 +524,12 @@ fn function(
     )
 }
 
-fn visibility(v: FunctionVisibility) -> IR::FunctionVisibility {
+fn visibility(v: Visibility) -> IR::FunctionVisibility {
     match v {
-        FunctionVisibility::Public(_) => IR::FunctionVisibility::Public,
-        FunctionVisibility::Script(_) => IR::FunctionVisibility::Script,
-        FunctionVisibility::Friend(_) => IR::FunctionVisibility::Friend,
-        FunctionVisibility::Internal => IR::FunctionVisibility::Internal,
+        Visibility::Public(_) => IR::FunctionVisibility::Public,
+        Visibility::Script(_) => IR::FunctionVisibility::Script,
+        Visibility::Friend(_) => IR::FunctionVisibility::Friend,
+        Visibility::Internal => IR::FunctionVisibility::Internal,
     }
 }
 
@@ -585,6 +599,7 @@ fn function_body(
     context: &mut Context,
     parameters: Vec<(Var, H::SingleType)>,
     mut locals_map: UniqueMap<Var, H::SingleType>,
+    loop_heads: BTreeSet<H::Label>,
     start: H::Label,
     blocks_map: H::BasicBlocks,
 ) -> (Vec<(IR::Var, IR::Type)>, IR::BytecodeBlocks) {
@@ -611,7 +626,8 @@ fn function_body(
         bytecode_blocks.push((label(lbl), code));
     }
 
-    remove_fallthrough_jumps::code(&mut bytecode_blocks);
+    let loop_heads = loop_heads.into_iter().map(label).collect();
+    remove_fallthrough_jumps::code(&loop_heads, &mut bytecode_blocks);
 
     (locals, bytecode_blocks)
 }

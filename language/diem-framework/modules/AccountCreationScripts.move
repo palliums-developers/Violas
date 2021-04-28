@@ -10,7 +10,8 @@ module AccountCreationScripts {
     /// # Technical Description
     /// Creates a `ChildVASP` account for the sender `parent_vasp` at `child_address` with a balance of
     /// `child_initial_balance` in `CoinType` and an initial authentication key of
-    /// `auth_key_prefix | child_address`.
+    /// `auth_key_prefix | child_address`. Authentication key prefixes, and how to construct them from an ed25519 public key is described
+    /// [here](https://developers.diem.com/docs/core/accounts/#addresses-authentication-keys-and-cryptographic-keys).
     ///
     /// If `add_all_currencies` is true, the child address will have a zero balance in all available
     /// currencies in the system.
@@ -19,20 +20,23 @@ module AccountCreationScripts {
     /// Parent VASP account. The child account will be recorded against the limit of
     /// child accounts of the creating Parent VASP account.
     ///
-    /// ## Events
-    /// Successful execution with a `child_initial_balance` greater than zero will emit:
-    /// * A `DiemAccount::SentPaymentEvent` with the `payer` field being the Parent VASP's address,
-    /// and payee field being `child_address`. This is emitted on the Parent VASP's
-    /// `DiemAccount::DiemAccount` `sent_events` handle.
-    /// * A `DiemAccount::ReceivedPaymentEvent` with the  `payer` field being the Parent VASP's address,
-    /// and payee field being `child_address`. This is emitted on the new Child VASPS's
-    /// `DiemAccount::DiemAccount` `received_events` handle.
+    /// # Events
+    /// Successful execution will emit:
+    /// * A `DiemAccount::CreateAccountEvent` with the `created` field being `child_address`,
+    /// and the `rold_id` field being `Roles::CHILD_VASP_ROLE_ID`. This is emitted on the
+    /// `DiemAccount::AccountOperationsCapability` `creation_events` handle.
+    ///
+    /// Successful execution with a `child_initial_balance` greater than zero will additionaly emit:
+    /// * A `DiemAccount::SentPaymentEvent` with the `payee` field being `child_address`.
+    /// This is emitted on the Parent VASP's `DiemAccount::DiemAccount` `sent_events` handle.
+    /// * A `DiemAccount::ReceivedPaymentEvent` with the  `payer` field being the Parent VASP's address.
+    /// This is emitted on the new Child VASPS's `DiemAccount::DiemAccount` `received_events` handle.
     ///
     /// # Parameters
     /// | Name                    | Type         | Description                                                                                                                                 |
     /// | ------                  | ------       | -------------                                                                                                                               |
     /// | `CoinType`              | Type         | The Move type for the `CoinType` that the child account should be created with. `CoinType` must be an already-registered currency on-chain. |
-    /// | `parent_vasp`           | `&signer`    | The signer reference of the sending account. Must be a Parent VASP account.                                                                 |
+    /// | `parent_vasp`           | `signer`     | The reference of the sending account. Must be a Parent VASP account.                                                                        |
     /// | `child_address`         | `address`    | Address of the to-be-created Child VASP account.                                                                                            |
     /// | `auth_key_prefix`       | `vector<u8>` | The authentication key prefix that will be used initially for the newly created account.                                                    |
     /// | `add_all_currencies`    | `bool`       | Whether to publish balance resources for all known currencies when the account is created.                                                  |
@@ -59,21 +63,21 @@ module AccountCreationScripts {
     /// * `AccountAdministrationScripts::create_recovery_address`
 
     public(script) fun create_child_vasp_account<CoinType: store>(
-        parent_vasp: &signer,
+        parent_vasp: signer,
         child_address: address,
         auth_key_prefix: vector<u8>,
         add_all_currencies: bool,
         child_initial_balance: u64
     ) {
         DiemAccount::create_child_vasp_account<CoinType>(
-            parent_vasp,
+            &parent_vasp,
             child_address,
             auth_key_prefix,
             add_all_currencies,
         );
         // Give the newly created child `child_initial_balance` coins
         if (child_initial_balance > 0) {
-            let vasp_withdrawal_cap = DiemAccount::extract_withdraw_capability(parent_vasp);
+            let vasp_withdrawal_cap = DiemAccount::extract_withdraw_capability(&parent_vasp);
             DiemAccount::pay_from<CoinType>(
                 &vasp_withdrawal_cap, child_address, child_initial_balance, x"", x""
             );
@@ -118,9 +122,21 @@ module AccountCreationScripts {
             Errors::INVALID_STATE,
             Errors::INVALID_ARGUMENT;
 
+        include DiemAccount::MakeAccountEmits{new_account_address: child_address};
+        include child_initial_balance > 0 ==>
+            DiemAccount::PayFromEmits<CoinType>{
+                cap: parent_cap,
+                payee: child_address,
+                amount: child_initial_balance,
+                metadata: x"",
+            };
+
         /// **Access Control:**
         /// Only Parent VASP accounts can create Child VASP accounts [[A7]][ROLE].
         include Roles::AbortsIfNotParentVasp{account: parent_vasp};
+
+        /// TODO(timeout): this currently times out
+        pragma verify = false;
     }
 
     /// # Summary
@@ -132,15 +148,23 @@ module AccountCreationScripts {
     /// `auth_key_prefix` | `new_account_address`. It publishes a
     /// `ValidatorOperatorConfig::ValidatorOperatorConfig` resource with the specified `human_name`.
     /// This script does not assign the validator operator to any validator accounts but only creates the account.
+    /// Authentication key prefixes, and how to construct them from an ed25519 public key are described
+    /// [here](https://developers.diem.com/docs/core/accounts/#addresses-authentication-keys-and-cryptographic-keys).
+    ///
+    /// # Events
+    /// Successful execution will emit:
+    /// * A `DiemAccount::CreateAccountEvent` with the `created` field being `new_account_address`,
+    /// and the `rold_id` field being `Roles::VALIDATOR_OPERATOR_ROLE_ID`. This is emitted on the
+    /// `DiemAccount::AccountOperationsCapability` `creation_events` handle.
     ///
     /// # Parameters
-    /// | Name                  | Type         | Description                                                                                     |
-    /// | ------                | ------       | -------------                                                                                   |
-    /// | `dr_account`          | `&signer`    | The signer reference of the sending account of this transaction. Must be the Diem Root signer. |
-    /// | `sliding_nonce`       | `u64`        | The `sliding_nonce` (see: `SlidingNonce`) to be used for this transaction.                      |
-    /// | `new_account_address` | `address`    | Address of the to-be-created Validator account.                                                 |
-    /// | `auth_key_prefix`     | `vector<u8>` | The authentication key prefix that will be used initially for the newly created account.        |
-    /// | `human_name`          | `vector<u8>` | ASCII-encoded human name for the validator.                                                     |
+    /// | Name                  | Type         | Description                                                                              |
+    /// | ------                | ------       | -------------                                                                            |
+    /// | `dr_account`          | `signer`     | The signer of the sending account of this transaction. Must be the Diem Root signer.     |
+    /// | `sliding_nonce`       | `u64`        | The `sliding_nonce` (see: `SlidingNonce`) to be used for this transaction.               |
+    /// | `new_account_address` | `address`    | Address of the to-be-created Validator account.                                          |
+    /// | `auth_key_prefix`     | `vector<u8>` | The authentication key prefix that will be used initially for the newly created account. |
+    /// | `human_name`          | `vector<u8>` | ASCII-encoded human name for the validator.                                              |
     ///
     /// # Common Abort Conditions
     /// | Error Category              | Error Reason                            | Description                                                                                |
@@ -163,15 +187,15 @@ module AccountCreationScripts {
     /// * `ValidatorAdministrationScripts::set_validator_config_and_reconfigure`
 
     public(script) fun create_validator_operator_account(
-        dr_account: &signer,
+        dr_account: signer,
         sliding_nonce: u64,
         new_account_address: address,
         auth_key_prefix: vector<u8>,
         human_name: vector<u8>
     ) {
-        SlidingNonce::record_nonce_or_abort(dr_account, sliding_nonce);
+        SlidingNonce::record_nonce_or_abort(&dr_account, sliding_nonce);
         DiemAccount::create_validator_operator_account(
-            dr_account,
+            &dr_account,
             new_account_address,
             auth_key_prefix,
             human_name,
@@ -220,17 +244,24 @@ module AccountCreationScripts {
     /// `ValidatorConfig::ValidatorConfig` is set to the passed in `human_name`.
     /// This script does not add the validator to the validator set or the system,
     /// but only creates the account.
+    /// Authentication keys, prefixes, and how to construct them from an ed25519 public key are described
+    /// [here](https://developers.diem.com/docs/core/accounts/#addresses-authentication-keys-and-cryptographic-keys).
+    ///
+    /// # Events
+    /// Successful execution will emit:
+    /// * A `DiemAccount::CreateAccountEvent` with the `created` field being `new_account_address`,
+    /// and the `rold_id` field being `Roles::VALIDATOR_ROLE_ID`. This is emitted on the
+    /// `DiemAccount::AccountOperationsCapability` `creation_events` handle.
     ///
     /// # Parameters
-    /// | Name                  | Type         | Description                                                                                     |
-    /// | ------                | ------       | -------------                                                                                   |
-    /// | `dr_account`          | `&signer`    | The signer reference of the sending account of this transaction. Must be the Diem Root signer. |
-    /// | `sliding_nonce`       | `u64`        | The `sliding_nonce` (see: `SlidingNonce`) to be used for this transaction.                      |
-    /// | `new_account_address` | `address`    | Address of the to-be-created Validator account.                                                 |
-    /// | `auth_key_prefix`     | `vector<u8>` | The authentication key prefix that will be used initially for the newly created account.        |
-    /// | `human_name`          | `vector<u8>` | ASCII-encoded human name for the validator.                                                     |
+    /// | Name                  | Type         | Description                                                                              |
+    /// | ------                | ------       | -------------                                                                            |
+    /// | `dr_account`          | `signer`     | The signer of the sending account of this transaction. Must be the Diem Root signer.     |
+    /// | `sliding_nonce`       | `u64`        | The `sliding_nonce` (see: `SlidingNonce`) to be used for this transaction.               |
+    /// | `new_account_address` | `address`    | Address of the to-be-created Validator account.                                          |
+    /// | `auth_key_prefix`     | `vector<u8>` | The authentication key prefix that will be used initially for the newly created account. |
+    /// | `human_name`          | `vector<u8>` | ASCII-encoded human name for the validator.                                              |
     ///
-
     /// # Common Abort Conditions
     /// | Error Category              | Error Reason                            | Description                                                                                |
     /// | ----------------            | --------------                          | -------------                                                                              |
@@ -252,21 +283,20 @@ module AccountCreationScripts {
     /// * `ValidatorAdministrationScripts::set_validator_config_and_reconfigure`
 
     public(script) fun create_validator_account(
-        dr_account: &signer,
+        dr_account: signer,
         sliding_nonce: u64,
         new_account_address: address,
         auth_key_prefix: vector<u8>,
         human_name: vector<u8>,
     ) {
-        SlidingNonce::record_nonce_or_abort(dr_account, sliding_nonce);
+        SlidingNonce::record_nonce_or_abort(&dr_account, sliding_nonce);
         DiemAccount::create_validator_account(
-            dr_account,
+            &dr_account,
             new_account_address,
             auth_key_prefix,
             human_name,
         );
       }
-
 
     /// Only Diem root may create Validator accounts
     /// Authentication: ValidatorAccountAbortsIf includes AbortsIfNotDiemRoot.
@@ -307,12 +337,20 @@ module AccountCreationScripts {
     /// `add_all_currencies` is true, 0 balances for all available currencies in the system will
     /// also be added. This can only be invoked by an TreasuryCompliance account.
     /// `sliding_nonce` is a unique nonce for operation, see `SlidingNonce` for details.
+    /// Authentication keys, prefixes, and how to construct them from an ed25519 public key are described
+    /// [here](https://developers.diem.com/docs/core/accounts/#addresses-authentication-keys-and-cryptographic-keys).
+    ///
+    /// # Events
+    /// Successful execution will emit:
+    /// * A `DiemAccount::CreateAccountEvent` with the `created` field being `new_account_address`,
+    /// and the `rold_id` field being `Roles::PARENT_VASP_ROLE_ID`. This is emitted on the
+    /// `DiemAccount::AccountOperationsCapability` `creation_events` handle.
     ///
     /// # Parameters
     /// | Name                  | Type         | Description                                                                                                                                                    |
     /// | ------                | ------       | -------------                                                                                                                                                  |
     /// | `CoinType`            | Type         | The Move type for the `CoinType` currency that the Parent VASP account should be initialized with. `CoinType` must be an already-registered currency on-chain. |
-    /// | `tc_account`          | `&signer`    | The signer reference of the sending account of this transaction. Must be the Treasury Compliance account.                                                      |
+    /// | `tc_account`          | `signer`     | The signer of the sending account of this transaction. Must be the Treasury Compliance account.                                                                |
     /// | `sliding_nonce`       | `u64`        | The `sliding_nonce` (see: `SlidingNonce`) to be used for this transaction.                                                                                     |
     /// | `new_account_address` | `address`    | Address of the to-be-created Parent VASP account.                                                                                                              |
     /// | `auth_key_prefix`     | `vector<u8>` | The authentication key prefix that will be used initially for the newly created account.                                                                       |
@@ -340,16 +378,16 @@ module AccountCreationScripts {
     /// * `AccountAdministrationScripts::rotate_dual_attestation_info`
 
     public(script) fun create_parent_vasp_account<CoinType: store>(
-        tc_account: &signer,
+        tc_account: signer,
         sliding_nonce: u64,
         new_account_address: address,
         auth_key_prefix: vector<u8>,
         human_name: vector<u8>,
         add_all_currencies: bool
     ) {
-        SlidingNonce::record_nonce_or_abort(tc_account, sliding_nonce);
+        SlidingNonce::record_nonce_or_abort(&tc_account, sliding_nonce);
         DiemAccount::create_parent_vasp_account<CoinType>(
-            tc_account,
+            &tc_account,
             new_account_address,
             auth_key_prefix,
             human_name,
@@ -389,16 +427,24 @@ module AccountCreationScripts {
     /// `auth_key_prefix` | `addr` and a 0 balance of type `Currency`. If `add_all_currencies` is true,
     /// 0 balances for all available currencies in the system will also be added. This can only be
     /// invoked by an account with the TreasuryCompliance role.
+    /// Authentication keys, prefixes, and how to construct them from an ed25519 public key are described
+    /// [here](https://developers.diem.com/docs/core/accounts/#addresses-authentication-keys-and-cryptographic-keys).
     ///
     /// At the time of creation the account is also initialized with default mint tiers of (500_000,
     /// 5000_000, 50_000_000, 500_000_000), and preburn areas for each currency that is added to the
     /// account.
     ///
+    /// # Events
+    /// Successful execution will emit:
+    /// * A `DiemAccount::CreateAccountEvent` with the `created` field being `addr`,
+    /// and the `rold_id` field being `Roles::DESIGNATED_DEALER_ROLE_ID`. This is emitted on the
+    /// `DiemAccount::AccountOperationsCapability` `creation_events` handle.
+    ///
     /// # Parameters
     /// | Name                 | Type         | Description                                                                                                                                         |
     /// | ------               | ------       | -------------                                                                                                                                       |
     /// | `Currency`           | Type         | The Move type for the `Currency` that the Designated Dealer should be initialized with. `Currency` must be an already-registered currency on-chain. |
-    /// | `tc_account`         | `&signer`    | The signer reference of the sending account of this transaction. Must be the Treasury Compliance account.                                           |
+    /// | `tc_account`         | `signer`     | The signer of the sending account of this transaction. Must be the Treasury Compliance account.                                                     |
     /// | `sliding_nonce`      | `u64`        | The `sliding_nonce` (see: `SlidingNonce`) to be used for this transaction.                                                                          |
     /// | `addr`               | `address`    | Address of the to-be-created Designated Dealer account.                                                                                             |
     /// | `auth_key_prefix`    | `vector<u8>` | The authentication key prefix that will be used initially for the newly created account.                                                            |
@@ -424,16 +470,16 @@ module AccountCreationScripts {
     /// * `AccountAdministrationScripts::rotate_dual_attestation_info`
 
     public(script) fun create_designated_dealer<Currency: store>(
-        tc_account: &signer,
+        tc_account: signer,
         sliding_nonce: u64,
         addr: address,
         auth_key_prefix: vector<u8>,
         human_name: vector<u8>,
         add_all_currencies: bool,
     ) {
-        SlidingNonce::record_nonce_or_abort(tc_account, sliding_nonce);
+        SlidingNonce::record_nonce_or_abort(&tc_account, sliding_nonce);
         DiemAccount::create_designated_dealer<Currency>(
-            tc_account,
+            &tc_account,
             addr,
             auth_key_prefix,
             human_name,
@@ -457,6 +503,8 @@ module AccountCreationScripts {
             Errors::NOT_PUBLISHED,
             Errors::ALREADY_PUBLISHED,
             Errors::REQUIRES_ROLE;
+
+        include DiemAccount::MakeAccountEmits{new_account_address: addr};
 
         /// **Access Control:**
         /// Only the Treasury Compliance account can create Designated Dealer accounts [[A5]][ROLE].

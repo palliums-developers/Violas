@@ -23,7 +23,7 @@ use crate::{
     },
     model::{FieldId, Loc, ModuleEnv, ModuleId, NodeId, QualifiedId, SpecFunId, StructId},
     symbol::{Symbol, SymbolPool},
-    ty::{PrimitiveType, Substitution, Type, TypeDisplayContext},
+    ty::{PrimitiveType, Substitution, Type, TypeDisplayContext, Variance, BOOL_TYPE},
 };
 
 #[derive(Debug)]
@@ -95,15 +95,6 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
         }
     }
 
-    pub fn set_in_let(mut self) -> Self {
-        self.in_let = true;
-        self
-    }
-
-    pub fn translate_fun_as_spec_fun(&mut self) {
-        self.translating_fun_as_spec_fun = true;
-    }
-
     pub fn new_with_old(
         parent: &'module_translator mut ModuleBuilder<'env, 'translator>,
         allow_old: bool,
@@ -115,6 +106,15 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
             et.old_status = OldExpStatus::NotSupported;
         };
         et
+    }
+
+    pub fn set_in_let(mut self) -> Self {
+        self.in_let = true;
+        self
+    }
+
+    pub fn translate_fun_as_spec_fun(&mut self) {
+        self.translating_fun_as_spec_fun = true;
     }
 
     /// Extract a map from names to types from the scopes of this build.
@@ -196,17 +196,24 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
         self.parent.parent.env.get_node_instantiation_opt(node_id)
     }
 
-    /// Shortcut to set node type.
-    pub fn set_node_type(&self, node_id: NodeId, ty: Type) {
-        self.parent.parent.env.set_node_type(node_id, ty);
+    /// Shortcut to update node type.
+    pub fn update_node_type(&self, node_id: NodeId, ty: Type) {
+        self.parent.parent.env.update_node_type(node_id, ty);
     }
 
-    /// Shortcut to set instantiation for the given node id.
+    /// Shortcut to set/update instantiation for the given node id.
     fn set_node_instantiation(&self, node_id: NodeId, instantiation: Vec<Type>) {
         self.parent
             .parent
             .env
             .set_node_instantiation(node_id, instantiation);
+    }
+
+    fn update_node_instantiation(&self, node_id: NodeId, instantiation: Vec<Type>) {
+        self.parent
+            .parent
+            .env
+            .update_node_instantiation(node_id, instantiation);
     }
 
     /// Finalizes types in this build, producing errors if some could not be inferred
@@ -222,14 +229,14 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
 
             if let Some(ty) = self.get_node_type_opt(node_id) {
                 let ty = self.finalize_type(node_id, &ty);
-                self.set_node_type(node_id, ty);
+                self.update_node_type(node_id, ty);
             }
             if let Some(inst) = self.get_node_instantiation_opt(node_id) {
                 let inst = inst
                     .iter()
                     .map(|ty| self.finalize_type(node_id, ty))
                     .collect_vec();
-                self.set_node_instantiation(node_id, inst);
+                self.update_node_instantiation(node_id, inst);
             }
         }
     }
@@ -262,14 +269,14 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
 
             if let Some(ty) = self.get_node_type_opt(node_id) {
                 let ty = self.fix_type(generated_params, &ty);
-                self.set_node_type(node_id, ty);
+                self.update_node_type(node_id, ty);
             }
             if let Some(inst) = self.get_node_instantiation_opt(node_id) {
                 let inst = inst
                     .iter()
                     .map(|ty| self.fix_type(generated_params, ty))
                     .collect_vec();
-                self.set_node_instantiation(node_id, inst);
+                self.update_node_instantiation(node_id, inst);
             }
         }
     }
@@ -623,19 +630,17 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                 let loc = self.to_loc(&access.loc);
                 let sym = self.parent.module_access_to_qualified(access);
                 let rty = self.parent.parent.lookup_type(&loc, &sym);
-                if !args.is_empty() {
-                    // Replace type instantiation.
-                    if let Type::Struct(mid, sid, params) = &rty {
-                        if params.len() != args.len() {
-                            self.error(&loc, "type argument count mismatch");
-                            Type::Error
-                        } else {
-                            Type::Struct(*mid, *sid, self.translate_types(args))
-                        }
-                    } else {
-                        self.error(&loc, "type cannot have type arguments");
+                // Replace type instantiation.
+                if let Type::Struct(mid, sid, params) = &rty {
+                    if params.len() != args.len() {
+                        self.error(&loc, "type argument count mismatch");
                         Type::Error
+                    } else {
+                        Type::Struct(*mid, *sid, self.translate_types(args))
                     }
+                } else if !args.is_empty() {
+                    self.error(&loc, "type cannot have type arguments");
+                    Type::Error
                 } else {
                     rty
                 }
@@ -886,7 +891,11 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
 
         // Ignore assert statement.
         if name == self.parent.parent.assert_symbol() {
-            return Exp::Call(self.new_node_id(), Operation::NoOp, vec![]);
+            return Exp::Call(
+                self.new_node_id_with_type_loc(expected_type, &self.to_loc(&maccess.loc)),
+                Operation::NoOp,
+                vec![],
+            );
         }
 
         let is_old = module_name.is_none() && name == self.parent.parent.old_symbol();
@@ -1298,6 +1307,7 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
             return self.new_error_exp();
         }
         let struct_exp = self.translate_exp(&args[0], expected_type);
+        let expected_type = &self.subs.specialize(expected_type);
         if let EA::Exp_::Name(
             Spanned {
                 value: EA::ModuleAccess_::Name(name),
@@ -1310,8 +1320,9 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                 self.lookup_field(loc, &expected_type, name)
             {
                 // Translate the new value with the field type as the expected type.
-                let value_exp = self.translate_exp(&args[2], &field_type);
+                let value_exp = self.translate_exp(&args[2], &self.subs.specialize(&field_type));
                 let id = self.new_node_id_with_type_loc(&expected_type, loc);
+                self.set_node_instantiation(id, vec![expected_type.clone()]);
                 Exp::Call(
                     id,
                     Operation::UpdateField(struct_id.module_id, struct_id.id, field_id),
@@ -1471,7 +1482,12 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
             let mut success = true;
             for (i, arg_ty) in arg_types.iter().enumerate() {
                 let instantiated = cand.arg_types[i].instantiate(&instantiation);
-                if let Err(err) = subs.unify(&self.type_display_context(), arg_ty, &instantiated) {
+                if let Err(err) = subs.unify(
+                    &self.type_display_context(),
+                    Variance::Allow,
+                    arg_ty,
+                    &instantiated,
+                ) {
                     outruled.push((cand, format!("{} for argument {}", err.message, i + 1)));
                     success = false;
                     break;
@@ -1532,7 +1548,9 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                     if !self.translating_fun_as_spec_fun {
                         // Record the usage of spec function in specs, used later
                         // in spec build.
-                        self.parent.parent.add_used_spec_fun(module_id, spec_fun_id);
+                        self.parent
+                            .parent
+                            .add_used_spec_fun(module_id.qualified(spec_fun_id));
                     }
                     let module_name = match module {
                         Some(m) => m,
@@ -1676,14 +1694,14 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                 return self.new_error_exp();
             }
             if let Some(field_decls) = &entry.fields {
-                let mut fields_not_convered: BTreeSet<Symbol> = BTreeSet::new();
-                fields_not_convered.extend(field_decls.keys());
+                let mut fields_not_covered: BTreeSet<Symbol> = BTreeSet::new();
+                fields_not_covered.extend(field_decls.keys());
                 let mut args = BTreeMap::new();
                 for (name_loc, name_, (_, exp)) in fields.iter() {
                     let field_name = self.symbol_pool().make(&name_);
                     if let Some((idx, field_ty)) = field_decls.get(&field_name) {
                         let exp = self.translate_exp(exp, &field_ty.instantiate(&instantiation));
-                        fields_not_convered.remove(&field_name);
+                        fields_not_covered.remove(&field_name);
                         args.insert(idx, exp);
                     } else {
                         self.error(
@@ -1696,12 +1714,12 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                         );
                     }
                 }
-                if !fields_not_convered.is_empty() {
+                if !fields_not_covered.is_empty() {
                     self.error(
                         loc,
                         &format!(
                             "missing fields {}",
-                            fields_not_convered
+                            fields_not_covered
                                 .iter()
                                 .map(|n| format!("`{}`", n.display(self.symbol_pool())))
                                 .join(", ")
@@ -1709,15 +1727,27 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
                     );
                     self.new_error_exp()
                 } else {
-                    let struct_ty = Type::Struct(entry.module_id, entry.struct_id, instantiation);
+                    let struct_ty =
+                        Type::Struct(entry.module_id, entry.struct_id, instantiation.clone());
                     let struct_ty =
                         self.check_type(loc, &struct_ty, expected_type, "in pack expression");
-                    let args = args
+                    let mut args = args
                         .into_iter()
                         .sorted_by_key(|(i, _)| *i)
                         .map(|(_, e)| e)
                         .collect_vec();
+                    if args.is_empty() {
+                        // The move compiler inserts a dummy field with the value of false
+                        // for structs with no fields. This is also what we find in the
+                        // Model metadata (i.e. a field `dummy_field`). We simulate this here
+                        // for now, though it would be better to remove it everywhere as it
+                        // can be confusing to users. However, its currently hard to do this,
+                        // because a user could also have defined the `dummy_field`.
+                        let id = self.new_node_id_with_type_loc(&BOOL_TYPE, loc);
+                        args.push(Exp::Value(id, Value::Bool(false)));
+                    }
                     let id = self.new_node_id_with_type_loc(&struct_ty, loc);
+                    self.set_node_instantiation(id, instantiation);
                     Exp::Call(id, Operation::Pack(entry.module_id, entry.struct_id), args)
                 }
             } else {
@@ -1901,7 +1931,7 @@ impl<'env, 'translator, 'module_translator> ExpTranslator<'env, 'translator, 'mo
         // the build. This is because we also need to inherently borrow self via the
         // type_display_context which is passed into unification.
         let mut subs = std::mem::replace(&mut self.subs, Substitution::new());
-        let result = match subs.unify(&self.type_display_context(), ty, expected) {
+        let result = match subs.unify(&self.type_display_context(), Variance::Allow, ty, expected) {
             Ok(t) => t,
             Err(err) => {
                 self.error(&loc, &format!("{} {}", err.message, context_msg));

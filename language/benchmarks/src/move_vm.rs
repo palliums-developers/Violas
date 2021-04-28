@@ -2,21 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use criterion::Criterion;
+use criterion::{measurement::Measurement, Criterion};
 use diem_state_view::StateView;
 use diem_types::{access_path::AccessPath, account_address::AccountAddress};
 use diem_vm::data_cache::StateViewCache;
+use move_binary_format::CompiledModule;
 use move_core_types::{
-    gas_schedule::{GasAlgebra, GasUnits},
     identifier::{IdentStr, Identifier},
     language_storage::ModuleId,
 };
-use move_lang::{compiled_unit::CompiledUnit, shared::Address};
+use move_lang::{
+    compiled_unit::CompiledUnit,
+    shared::{Address, Flags},
+};
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM};
-use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
+use move_vm_types::gas_schedule::GasStatus;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
-use vm::CompiledModule;
 
 static MOVE_BENCH_SRC_PATH: Lazy<PathBuf> = Lazy::new(|| {
     vec![env!("CARGO_MANIFEST_DIR"), "src", "bench.move"]
@@ -34,7 +36,7 @@ static STDLIB_VECTOR_SRC_PATH: Lazy<PathBuf> = Lazy::new(|| {
 });
 
 /// Entry point for the bench, provide a function name to invoke in Module Bench in bench.move.
-pub fn bench(c: &mut Criterion, fun: &str) {
+pub fn bench<M: Measurement + 'static>(c: &mut Criterion<M>, fun: &str) {
     let modules = compile_modules();
     let move_vm = MoveVM::new();
     execute(c, &move_vm, modules, fun);
@@ -48,9 +50,9 @@ fn compile_modules() -> Vec<CompiledModule> {
             MOVE_BENCH_SRC_PATH.to_str().unwrap().to_owned(),
         ],
         &[],
-        Some(Address::DIEM_CORE),
         None,
         false,
+        Flags::empty(),
     )
     .expect("Error compiling...");
     compiled_units
@@ -63,15 +65,19 @@ fn compile_modules() -> Vec<CompiledModule> {
 }
 
 // execute a given function in the Bench module
-fn execute(c: &mut Criterion, move_vm: &MoveVM, modules: Vec<CompiledModule>, fun: &str) {
+fn execute<M: Measurement + 'static>(
+    c: &mut Criterion<M>,
+    move_vm: &MoveVM,
+    modules: Vec<CompiledModule>,
+    fun: &str,
+) {
     // establish running context
     let sender = AccountAddress::new(Address::DIEM_CORE.to_u8());
     let state = EmptyStateView;
-    let gas_schedule = zero_cost_schedule();
     let data_cache = StateViewCache::new(&state);
     let log_context = NoContextLog::new();
     let mut session = move_vm.new_session(&data_cache);
-    let mut cost_strategy = CostStrategy::system(&gas_schedule, GasUnits::new(100_000_000));
+    let mut gas_status = GasStatus::new_unmetered();
 
     for module in modules {
         let mut mod_blob = vec![];
@@ -79,7 +85,7 @@ fn execute(c: &mut Criterion, move_vm: &MoveVM, modules: Vec<CompiledModule>, fu
             .serialize(&mut mod_blob)
             .expect("Module serialization error");
         session
-            .publish_module(mod_blob, sender, &mut cost_strategy, &log_context)
+            .publish_module(mod_blob, sender, &mut gas_status, &log_context)
             .expect("Module must load");
     }
 
@@ -96,7 +102,7 @@ fn execute(c: &mut Criterion, move_vm: &MoveVM, modules: Vec<CompiledModule>, fu
                     &fun_name,
                     vec![],
                     vec![],
-                    &mut cost_strategy,
+                    &mut gas_status,
                     &log_context,
                 )
                 .unwrap_or_else(|err| {
@@ -121,10 +127,6 @@ struct EmptyStateView;
 impl StateView for EmptyStateView {
     fn get(&self, _: &AccessPath) -> Result<Option<Vec<u8>>> {
         Ok(None)
-    }
-
-    fn multi_get(&self, _access_paths: &[AccessPath]) -> Result<Vec<Option<Vec<u8>>>> {
-        unimplemented!()
     }
 
     fn is_genesis(&self) -> bool {

@@ -4,8 +4,8 @@ on:
   schedule:
     - cron: "14 14 * * *"
   # Uncomment below to test.
-  #push:
-  #  branches: [gha-test-*, canary, auto]
+  # push:
+  #   branches: [gha-test-*, canary, auto]
 
 jobs:
   audit:
@@ -17,9 +17,9 @@ jobs:
       matrix:
         #this is a painful solution since it doesn't pick up new branches, other option is lotsa shell in one job....
         #to test in canary add in canary here.....
-        target-branch: [main, release-1.1]
+        target-branch: [main, release-1.1, release-1.2]
     env:
-      MESSAGE_PAYLOAD_FILE: /tmp/message
+      AUDIT_SUMMARY_FILE: /tmp/summary
     steps:
       - uses: actions/checkout@v2
         with:
@@ -32,12 +32,26 @@ jobs:
         # 1. RUSTSEC-2021-0020 - Not impacted, see #7723
         # 2. RUSTSEC-2020-0146 - Not impacted, see #7826
         run: |
-          $CARGO $CARGOFLAGS audit --ignore RUSTSEC-2021-0020 --ignore RUSTSEC-2020-0146 >> $MESSAGE_PAYLOAD_FILE
-      - uses: ./.github/actions/slack-file
-        with:
-          webhook: ${{ secrets.WEBHOOK_AUDIT }}
-          payload-file: ${{ env.MESSAGE_PAYLOAD_FILE }}
+          cargo audit --color never --ignore RUSTSEC-2021-0020 --ignore RUSTSEC-2020-0146 > $AUDIT_SUMMARY_FILE
+      - name: set issue body content
         if: ${{ failure() }}
+        env:
+          JOB_URL: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          echo "ISSUE_BODY<<EOF" >> $GITHUB_ENV
+          echo "Found RUSTSEC in dependencies in job ${JOB_URL}" >> $GITHUB_ENV
+          echo "\`\`\`" >> $GITHUB_ENV
+          cat $AUDIT_SUMMARY_FILE >> $GITHUB_ENV
+          echo "\`\`\`" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+      - uses: diem/actions/create-issue@04f4286ca22e4b9efbc5eb49a20e2e5389c5318b
+        if: ${{ failure() }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          title: "RUSTSEC in dependencies in branch ${{ matrix.target-branch }}"
+          body: ${{ env.ISSUE_BODY }}
+          assignees: "@diem/diem-core-oncall"
+          labels: "dependecies"
       - uses: ./.github/actions/build-teardown
 
   coverage:
@@ -98,7 +112,7 @@ jobs:
       - name: install azcopy
         run: |
           # Download AzCopy
-          curl -sL -o downloadazcopy-v10-linux "https://aka.ms/downloadazcopy-v10-linux"
+          curl -sL -o downloadazcopy-v10-linux "https://azcopyvnext.azureedge.net/release20210226/azcopy_linux_amd64_10.9.0.tar.gz"
           # Expand Archive
           tar -xvf downloadazcopy-v10-linux
           # Move AzCopy to the destination you want to store it
@@ -106,7 +120,7 @@ jobs:
           rm -rf downloadazcopy-v10-linux azcopy_linux_amd64_*
       - name: replay transactions
         run: |
-          cargo run --release --bin db-restore -- --target-db-dir /var/tmp/dbrestore/ auto --replay-all command-adapter --config "$CONFIG"
+          cargo run --release --bin db-restore -- --concurrent-downloads 2 --target-db-dir /var/tmp/dbrestore/ auto --replay-all command-adapter --config "$CONFIG"
       - uses: ./.github/actions/build-teardown
 
   json-rpc-backward-compat-test:
@@ -123,7 +137,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release-branch: [release-1.1]
+        release-branch: [release-1.1, release-1.2]
     steps:
       - uses: actions/checkout@v2
         with:
@@ -143,19 +157,56 @@ jobs:
         if: ${{ failure() }}
       - uses: ./.github/actions/build-teardown
 
+  prover-inconsistency-test:
+    runs-on: ubuntu-latest-xl
+    container:
+      image: diem/build_environment:${{ matrix.target-branch }}
+      volumes:
+        - "/home/runner/work/diem/diem:/opt/git/diem"
+    env:
+      MESSAGE_PAYLOAD_FILE: /tmp/message
+    strategy:
+      fail-fast: false
+      matrix:
+        target-branch: [main, release-1.1, release-1.2]
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ matrix.target-branch }}
+      - uses: ./.github/actions/build-setup
+      - uses: actions/cache@v2.1.5
+        with:
+          path: "/opt/cargo/git\n/opt/cargo/registry\n/opt/cargo/.package-cache"
+          key: crates-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: "crates-${{ runner.os }}"
+      - name: Run the prover tests with the inconsistency check
+        run: |
+          cd /opt/git/diem/
+          MVP_TEST_INCONSISTENCY=1 cargo test -p move-prover --release >> $MESSAGE_PAYLOAD_FILE
+          sccache -s
+      - uses: ./.github/actions/slack-file
+        with:
+          webhook: ${{ secrets.WEBHOOK_MOVE_PROVER }}
+          payload-file: ${{ env.MESSAGE_PAYLOAD_FILE }}
+        if: ${{ failure() }}
+      - uses: ./.github/actions/build-teardown
+
   prune-docker-images:
     runs-on: ubuntu-latest
+    environment:
+      name: Docker
+      url: https://hub.docker.com/u/diem
     steps:
       - uses: actions/checkout@v2
       - name: sign in to DockerHub; install image signing cert
         uses: ./.github/actions/dockerhub_login
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-          key_material: ${{ secrets.DOCKERHUB_KEY_MATERIAL }}
-          key_name: ${{ secrets.DOCKERHUB_KEY_NAME }}
-          key_password: ${{ secrets.DOCKERHUB_KEY_PASSWORD }}
+          username: ${{ secrets.ENV_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.ENV_DOCKERHUB_PASSWORD }}
+          key_material: ${{ secrets.ENV_DOCKERHUB_KEY_MATERIAL }}
+          key_name: ${{ secrets.ENV_DOCKERHUB_KEY_NAME }}
+          key_password: ${{ secrets.ENV_DOCKERHUB_KEY_PASSWORD }}
       - name: prune Docker image
         if: ${{ github.ref != 'refs/heads/auto' }}
         run: |
-          scripts/dockerhub_prune.sh -u "${{ secrets.DOCKERHUB_USERNAME }}" -p "${{ secrets.DOCKERHUB_PASSWORD }}" -x
+          scripts/dockerhub_prune.sh -u "${{ secrets.ENV_DOCKERHUB_USERNAME }}" -p "${{ secrets.ENV_DOCKERHUB_PASSWORD }}" -x

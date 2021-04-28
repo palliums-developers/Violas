@@ -1,9 +1,8 @@
 # while using circle we'll use circle's base image.
-FROM archlinux:base-devel-20210314.0.17164@sha256:d4dbfd0933bcca45168b4f7dd5926f09bf4f7e1a23cece71e73723ef6bf85425 AS setup_ci_arch
+FROM archlinux:base-devel-20210425.0.20608@sha256:60b1497fba1ae143e5479a406ee522642e7bbbcf90b1f27a822317e8a0a87260 AS setup_ci_arch
 
 WORKDIR /diem
 COPY rust-toolchain /diem/rust-toolchain
-COPY cargo-toolchain /diem/cargo-toolchain
 COPY scripts/dev_setup.sh /diem/scripts/dev_setup.sh
 
 # WORKAROUND for glibc 2.33 and old Docker
@@ -34,8 +33,7 @@ RUN [ -x "$(command -v shellcheck)" ] \
     && [ -x "$(command -v aws)" ] \
     && [ -x "$(command -v z3)" ] \
     && [ -x "$(command -v "$HOME/.dotnet/tools/boogie")" ] \
-    && [ -x "$(xargs rustup which cargo --toolchain < /diem/rust-toolchain )" ] \
-    && [ -x "$(xargs rustup which cargo --toolchain < /diem/cargo-toolchain)" ]
+    && [ -x "$(xargs rustup which cargo --toolchain < /diem/rust-toolchain )" ]
 
 # should be a no-op
 RUN scripts/dev_setup.sh -b -p

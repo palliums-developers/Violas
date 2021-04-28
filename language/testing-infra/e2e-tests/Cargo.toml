@@ -22,14 +22,14 @@ diem-types = { path = "../../../types", features = ["fuzzing"] }
 move-core-types = { path = "../../move-core/types" }
 move-vm-runtime = { path = "../../move-vm/runtime", features = ["debug_module"] }
 move-vm-types = { path = "../../move-vm/types" }
-vm = { path = "../../vm" }
+move-binary-format = { path = "../../move-binary-format" }
 vm-genesis = { path = "../../tools/vm-genesis" }
 diem-vm = { path = "../../diem-vm" }
 proptest = "1.0.0"
 proptest-derive = "0.3.0"
 diem-proptest-helpers = { path = "../../../common/proptest-helpers" }
 diem-config =  { path = "../../../config" }
-compiled-stdlib = { path = "../../diem-framework/compiled" }
+diem-framework-releases = { path = "../../diem-framework/releases" }
 diem-workspace-hack = { path = "../../../common/workspace-hack" }
-transaction-builder = { path = "../../transaction-builder"}
+diem-transaction-builder = { path = "../../../sdk/transaction-builder"}
 hex = "0.4.3"

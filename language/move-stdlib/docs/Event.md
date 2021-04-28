@@ -10,7 +10,7 @@ events emitted to a handle and emit events to the event store.
 
 
 -  [Resource `EventHandleGenerator`](#0x1_Event_EventHandleGenerator)
--  [Resource `EventHandle`](#0x1_Event_EventHandle)
+-  [Struct `EventHandle`](#0x1_Event_EventHandle)
 -  [Constants](#@Constants_0)
 -  [Function `publish_generator`](#0x1_Event_publish_generator)
 -  [Function `fresh_guid`](#0x1_Event_fresh_guid)
@@ -37,7 +37,7 @@ A resource representing the counter used to generate uniqueness under each accou
 this resource to guarantee the uniqueness of the generated handle.
 
 
-<pre><code><b>resource</b> <b>struct</b> <a href="Event.md#0x1_Event_EventHandleGenerator">EventHandleGenerator</a>
+<pre><code><b>struct</b> <a href="Event.md#0x1_Event_EventHandleGenerator">EventHandleGenerator</a> has key
 </code></pre>
 
 
@@ -66,14 +66,14 @@ this resource to guarantee the uniqueness of the generated handle.
 
 <a name="0x1_Event_EventHandle"></a>
 
-## Resource `EventHandle`
+## Struct `EventHandle`
 
 A handle for an event such that:
 1. Other modules can emit events to this handle.
 2. Storage can use this handle to prove the total number of events that happened in the past.
 
 
-<pre><code><b>resource</b> <b>struct</b> <a href="Event.md#0x1_Event_EventHandle">EventHandle</a>&lt;T: <b>copyable</b>&gt;
+<pre><code><b>struct</b> <a href="Event.md#0x1_Event_EventHandle">EventHandle</a>&lt;T: drop, store&gt; has store
 </code></pre>
 
 
@@ -185,7 +185,7 @@ hash it with the sender's address, the result is guaranteed to be globally uniqu
 Use EventHandleGenerator to generate a unique event handle for <code>sig</code>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_new_event_handle">new_event_handle</a>&lt;T: <b>copyable</b>&gt;(account: &signer): <a href="Event.md#0x1_Event_EventHandle">Event::EventHandle</a>&lt;T&gt;
+<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_new_event_handle">new_event_handle</a>&lt;T: drop, store&gt;(account: &signer): <a href="Event.md#0x1_Event_EventHandle">Event::EventHandle</a>&lt;T&gt;
 </code></pre>
 
 
@@ -194,7 +194,7 @@ Use EventHandleGenerator to generate a unique event handle for <code>sig</code>
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_new_event_handle">new_event_handle</a>&lt;T: <b>copy</b> + drop + store&gt;(account: &signer): <a href="Event.md#0x1_Event_EventHandle">EventHandle</a>&lt;T&gt;
+<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_new_event_handle">new_event_handle</a>&lt;T: drop + store&gt;(account: &signer): <a href="Event.md#0x1_Event_EventHandle">EventHandle</a>&lt;T&gt;
 <b>acquires</b> <a href="Event.md#0x1_Event_EventHandleGenerator">EventHandleGenerator</a> {
     <b>let</b> addr = <a href="Signer.md#0x1_Signer_address_of">Signer::address_of</a>(account);
     <b>assert</b>(<b>exists</b>&lt;<a href="Event.md#0x1_Event_EventHandleGenerator">EventHandleGenerator</a>&gt;(addr), <a href="Errors.md#0x1_Errors_not_published">Errors::not_published</a>(<a href="Event.md#0x1_Event_EEVENT_GENERATOR">EEVENT_GENERATOR</a>));
@@ -216,7 +216,7 @@ Use EventHandleGenerator to generate a unique event handle for <code>sig</code>
 Emit an event with payload <code>msg</code> by using <code>handle_ref</code>'s key and counter.
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_emit_event">emit_event</a>&lt;T: <b>copyable</b>&gt;(handle_ref: &<b>mut</b> <a href="Event.md#0x1_Event_EventHandle">Event::EventHandle</a>&lt;T&gt;, msg: T)
+<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_emit_event">emit_event</a>&lt;T: drop, store&gt;(handle_ref: &<b>mut</b> <a href="Event.md#0x1_Event_EventHandle">Event::EventHandle</a>&lt;T&gt;, msg: T)
 </code></pre>
 
 
@@ -225,7 +225,7 @@ Emit an event with payload <code>msg</code> by using <code>handle_ref</code>'s k
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_emit_event">emit_event</a>&lt;T: <b>copy</b> + drop + store&gt;(handle_ref: &<b>mut</b> <a href="Event.md#0x1_Event_EventHandle">EventHandle</a>&lt;T&gt;, msg: T) {
+<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_emit_event">emit_event</a>&lt;T: drop + store&gt;(handle_ref: &<b>mut</b> <a href="Event.md#0x1_Event_EventHandle">EventHandle</a>&lt;T&gt;, msg: T) {
     <b>let</b> guid = *&handle_ref.guid;
 
     <a href="Event.md#0x1_Event_write_to_event_store">write_to_event_store</a>&lt;T&gt;(guid, handle_ref.counter, msg);
@@ -245,7 +245,7 @@ Native procedure that writes to the actual event stream in Event store
 This will replace the "native" portion of EmitEvent bytecode
 
 
-<pre><code><b>fun</b> <a href="Event.md#0x1_Event_write_to_event_store">write_to_event_store</a>&lt;T: <b>copyable</b>&gt;(guid: vector&lt;u8&gt;, count: u64, msg: T)
+<pre><code><b>fun</b> <a href="Event.md#0x1_Event_write_to_event_store">write_to_event_store</a>&lt;T: drop, store&gt;(guid: vector&lt;u8&gt;, count: u64, msg: T)
 </code></pre>
 
 
@@ -254,7 +254,7 @@ This will replace the "native" portion of EmitEvent bytecode
 <summary>Implementation</summary>
 
 
-<pre><code><b>native</b> <b>fun</b> <a href="Event.md#0x1_Event_write_to_event_store">write_to_event_store</a>&lt;T: <b>copy</b> + drop + store&gt;(guid: vector&lt;u8&gt;, count: u64, msg: T);
+<pre><code><b>native</b> <b>fun</b> <a href="Event.md#0x1_Event_write_to_event_store">write_to_event_store</a>&lt;T: drop + store&gt;(guid: vector&lt;u8&gt;, count: u64, msg: T);
 </code></pre>
 
 
@@ -268,7 +268,7 @@ This will replace the "native" portion of EmitEvent bytecode
 Destroy a unique handle.
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_destroy_handle">destroy_handle</a>&lt;T: <b>copyable</b>&gt;(handle: <a href="Event.md#0x1_Event_EventHandle">Event::EventHandle</a>&lt;T&gt;)
+<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_destroy_handle">destroy_handle</a>&lt;T: drop, store&gt;(handle: <a href="Event.md#0x1_Event_EventHandle">Event::EventHandle</a>&lt;T&gt;)
 </code></pre>
 
 
@@ -277,7 +277,7 @@ Destroy a unique handle.
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_destroy_handle">destroy_handle</a>&lt;T: <b>copy</b> + drop + store&gt;(handle: <a href="Event.md#0x1_Event_EventHandle">EventHandle</a>&lt;T&gt;) {
+<pre><code><b>public</b> <b>fun</b> <a href="Event.md#0x1_Event_destroy_handle">destroy_handle</a>&lt;T: drop + store&gt;(handle: <a href="Event.md#0x1_Event_EventHandle">EventHandle</a>&lt;T&gt;) {
     <a href="Event.md#0x1_Event_EventHandle">EventHandle</a>&lt;T&gt; { counter: _, guid: _ } = handle;
 }
 </code></pre>
@@ -297,6 +297,21 @@ pragma. They are implemented in the prover's prelude.
 
 
 <pre><code><b>pragma</b> intrinsic = <b>true</b>;
+</code></pre>
+
+
+Determines equality between the guids of two event handles. Since fields of intrinsic
+structs cannot be accessed, this function is provided.
+
+
+<a name="0x1_Event_spec_guid_eq"></a>
+
+
+<pre><code><b>define</b> <a href="Event.md#0x1_Event_spec_guid_eq">spec_guid_eq</a>&lt;T&gt;(h1: <a href="Event.md#0x1_Event_EventHandle">EventHandle</a>&lt;T&gt;, h2: <a href="Event.md#0x1_Event_EventHandle">EventHandle</a>&lt;T&gt;): bool {
+    // The implementation currently can just <b>use</b> <b>native</b> equality since the mocked prover
+    // representation does not have the `counter` field.
+    h1 == h2
+}
 </code></pre>
 
 

@@ -1,5 +1,5 @@
 // Tests the additional axiom that constrains address serialization to have the same size.
-module AddressSerialization {
+module 0x42::AddressSerialization {
     use 0x1::BCS;
 
     /// Serialized representation of address typed Move values have the same vector length.
@@ -19,4 +19,5 @@ module AddressSerialization {
         ensures len(BCS::serialize(mv1)) == len(BCS::serialize(mv2));
         ensures len(result_1) == len(result_2);
     }
+
 }

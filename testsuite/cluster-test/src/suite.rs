@@ -10,7 +10,7 @@ use crate::{
         CompatiblityTestParams, CpuFlamegraphParams, Experiment, ExperimentParam,
         PerformanceBenchmarkParams, PerformanceBenchmarkThreeRegionSimulationParams,
         RebootRandomValidatorsParams, ReconfigurationParams, RecoveryTimeParams,
-        TwinValidatorsParams, ValidatorVersioningParams,
+        StateSyncPerformanceParams, TwinValidatorsParams, ValidatorVersioningParams,
     },
 };
 use anyhow::{format_err, Result};
@@ -59,6 +59,7 @@ impl ExperimentSuite {
                 .enable_db_backup()
                 .build(cluster),
         ));
+        experiments.push(Box::new(StateSyncPerformanceParams::new(60).build(cluster)));
         experiments.push(Box::new(TwinValidatorsParams { pair: 1 }.build(cluster)));
         // This can't be run before any experiment that requires clean_data.
         experiments.push(Box::new(
@@ -160,6 +161,12 @@ impl ExperimentSuite {
         Self { experiments }
     }
 
+    fn new_state_sync_suite(cluster: &Cluster) -> Self {
+        let mut experiments: Vec<Box<dyn Experiment>> = vec![];
+        experiments.push(Box::new(StateSyncPerformanceParams::new(60).build(cluster)));
+        Self { experiments }
+    }
+
     pub fn new_by_name(cluster: &Cluster, name: &str) -> Result<Self> {
         match name {
             "perf" => Ok(Self::new_perf_suite(cluster)),
@@ -169,6 +176,7 @@ impl ExperimentSuite {
             "land_blocking_compat" => Self::new_land_blocking_compat_suite(cluster),
             "versioning" => Self::new_versioning_suite(cluster),
             "invalid" => Ok(Self::new_invalid_tx_suite(cluster)),
+            "state_sync" => Ok(Self::new_state_sync_suite(cluster)),
             other => Err(format_err!("Unknown suite: {}", other)),
         }
     }

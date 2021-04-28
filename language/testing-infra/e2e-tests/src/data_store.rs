@@ -5,7 +5,6 @@
 
 use crate::account::AccountData;
 use anyhow::Result;
-use compiled_stdlib::StdLibOptions;
 use diem_state_view::StateView;
 use diem_types::{
     access_path::AccessPath,
@@ -14,6 +13,7 @@ use diem_types::{
     write_set::{WriteOp, WriteSet},
 };
 use diem_vm::data_cache::RemoteStorage;
+use move_binary_format::errors::*;
 use move_core_types::{
     account_address::AccountAddress,
     language_storage::{ModuleId, StructTag},
@@ -21,15 +21,14 @@ use move_core_types::{
 use move_vm_runtime::data_cache::RemoteCache;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use vm::errors::*;
-use vm_genesis::generate_genesis_change_set_for_testing;
+use vm_genesis::{generate_genesis_change_set_for_testing, GenesisOptions};
 
 /// Dummy genesis ChangeSet for testing
 pub static GENESIS_CHANGE_SET: Lazy<ChangeSet> =
-    Lazy::new(|| generate_genesis_change_set_for_testing(StdLibOptions::Compiled));
+    Lazy::new(|| generate_genesis_change_set_for_testing(GenesisOptions::Compiled));
 
 pub static GENESIS_CHANGE_SET_FRESH: Lazy<ChangeSet> =
-    Lazy::new(|| generate_genesis_change_set_for_testing(StdLibOptions::Fresh));
+    Lazy::new(|| generate_genesis_change_set_for_testing(GenesisOptions::Fresh));
 
 /// An in-memory implementation of [`StateView`] and [`RemoteCache`] for the VM.
 ///
@@ -101,10 +100,6 @@ impl StateView for FakeDataStore {
     fn get(&self, access_path: &AccessPath) -> Result<Option<Vec<u8>>> {
         // Since the data is in-memory, it can't fail.
         Ok(self.data.get(access_path).cloned())
-    }
-
-    fn multi_get(&self, _access_paths: &[AccessPath]) -> Result<Vec<Option<Vec<u8>>>> {
-        unimplemented!();
     }
 
     fn is_genesis(&self) -> bool {

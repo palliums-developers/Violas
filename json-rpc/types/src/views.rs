@@ -91,7 +91,13 @@ impl AccountRoleView {
                     .iter()
                     .cloned()
                     .map(|amt_view| {
-                        PreburnQueueView::new(amt_view.currency.clone(), vec![amt_view])
+                        PreburnQueueView::new(
+                            amt_view.currency.clone(),
+                            vec![PreburnWithMetadataView {
+                                preburn: amt_view,
+                                metadata: None,
+                            }],
+                        )
                     })
                     .collect();
                 (preburn_balances, Some(preburn_queues))
@@ -102,7 +108,7 @@ impl AccountRoleView {
                     .map(|(currency_code, preburns)| {
                         let total_balance =
                             preburns.preburns().iter().fold(0, |acc: u64, preburn| {
-                                acc.checked_add(preburn.coin()).unwrap()
+                                acc.checked_add(preburn.preburn().coin()).unwrap()
                             });
                         AmountView::new(total_balance, &currency_code.as_str())
                     })
@@ -115,8 +121,12 @@ impl AccountRoleView {
                             preburns
                                 .preburns()
                                 .iter()
-                                .map(|preburn| {
-                                    AmountView::new(preburn.coin(), &currency_code.as_str())
+                                .map(|preburn| PreburnWithMetadataView {
+                                    preburn: AmountView::new(
+                                        preburn.preburn().coin(),
+                                        &currency_code.as_str(),
+                                    ),
+                                    metadata: Some(BytesView::new(preburn.metadata())),
                                 })
                                 .collect::<Vec<_>>(),
                         )
@@ -140,6 +150,9 @@ pub struct AccountView {
     pub delegated_withdrawal_capability: bool,
     pub is_frozen: bool,
     pub role: AccountRoleView,
+    // the transaction version of the account data
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
 }
 
 impl AccountView {
@@ -149,6 +162,7 @@ impl AccountView {
         balances: BTreeMap<Identifier, BalanceResource>,
         account_role: AccountRole,
         freezing_bit: FreezingBit,
+        version: u64,
     ) -> Self {
         Self {
             address,
@@ -166,18 +180,25 @@ impl AccountView {
             delegated_withdrawal_capability: account.has_delegated_withdrawal_capability(),
             is_frozen: freezing_bit.is_frozen(),
             role: AccountRoleView::from(account_role),
+            version: Some(version),
         }
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct PreburnQueueView {
-    currency: String,
-    preburns: Vec<AmountView>,
+    pub currency: String,
+    pub preburns: Vec<PreburnWithMetadataView>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct PreburnWithMetadataView {
+    pub preburn: AmountView,
+    pub metadata: Option<BytesView>,
 }
 
 impl PreburnQueueView {
-    pub fn new(currency: String, preburns: Vec<AmountView>) -> Self {
+    pub fn new(currency: String, preburns: Vec<PreburnWithMetadataView>) -> Self {
         Self { currency, preburns }
     }
 }
@@ -265,7 +286,11 @@ pub enum EventDataView {
         role_id: u64,
     },
     #[serde(rename = "unknown")]
-    Unknown {},
+    Unknown { bytes: Option<BytesView> },
+
+    // used by client to deserialize server response
+    #[serde(other)]
+    UnknownToClient,
 }
 
 impl TryFrom<ContractEvent> for EventDataView {
@@ -385,7 +410,9 @@ impl TryFrom<ContractEvent> for EventDataView {
                 committed_timestamp_secs: admin_transaction_event.committed_timestamp_secs(),
             }
         } else {
-            EventDataView::Unknown {}
+            EventDataView::Unknown {
+                bytes: Some(event.event_data().into()),
+            }
         };
 
         Ok(data)
@@ -530,6 +557,12 @@ pub enum VMStatusView {
     PublishingFailure,
 }
 
+impl VMStatusView {
+    pub fn is_executed(&self) -> bool {
+        matches!(self, Self::Executed)
+    }
+}
+
 impl std::fmt::Display for VMStatusView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -621,9 +654,12 @@ pub struct ScriptView {
     // script code bytes
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<BytesView>,
-    // script arguments, converted into string with type information.
+    // script arguments, converted into string with type information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Vec<String>>,
+    // script function arguments, converted into hex encoded BCS bytes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments_bcs: Option<Vec<BytesView>>,
     // script type arguments, converted into string
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_arguments: Option<Vec<String>>,
@@ -825,5 +861,29 @@ impl TryFrom<AccountStateProof> for AccountStateProofView {
                 account_state_proof.transaction_info_to_account_proof(),
             )?),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::views::EventDataView;
+    use diem_types::{contract_event::ContractEvent, event::EventKey};
+    use move_core_types::language_storage::TypeTag;
+    use std::{convert::TryInto, str::FromStr};
+
+    #[test]
+    fn test_unknown_event_data() {
+        let data = hex::decode("0000000000000000000000000000000000000000000000dd").unwrap();
+        let ev = ContractEvent::new(
+            EventKey::from_str("0000000000000000000000000000000000000000000000dd").unwrap(),
+            0,
+            TypeTag::Bool,
+            data.clone(),
+        );
+        if let EventDataView::Unknown { bytes } = ev.try_into().unwrap() {
+            assert_eq!(bytes.unwrap(), data.into());
+        } else {
+            panic!("expect unknown event data");
+        }
     }
 }

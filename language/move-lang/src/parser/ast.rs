@@ -58,14 +58,15 @@ pub struct Program {
 #[allow(clippy::large_enum_variant)]
 pub enum Definition {
     Module(ModuleDefinition),
-    Address(Loc, Address, Vec<ModuleDefinition>),
+    Address(Vec<Attributes>, Loc, Address, Vec<ModuleDefinition>),
     Script(Script),
 }
 
 #[derive(Debug, Clone)]
 pub struct Script {
+    pub attributes: Vec<Attributes>,
     pub loc: Loc,
-    pub uses: Vec<Use>,
+    pub uses: Vec<UseDecl>,
     pub constants: Vec<Constant>,
     pub function: Function,
     pub specs: Vec<SpecBlock>,
@@ -76,6 +77,34 @@ pub enum Use {
     Module(ModuleIdent, Option<ModuleName>),
     Members(ModuleIdent, Vec<(Name, Option<Name>)>),
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseDecl {
+    pub attributes: Vec<Attributes>,
+    pub use_: Use,
+}
+
+//**************************************************************************************************
+// Attributes
+//**************************************************************************************************
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttributeValue_ {
+    Value(Value),
+    NumValue(u128),
+    ModuleAccess(ModuleAccess),
+}
+pub type AttributeValue = Spanned<AttributeValue_>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Attribute_ {
+    Name(Name),
+    Assigned(Name, AttributeValue),
+    Parameterized(Name, Attributes),
+}
+pub type Attribute = Spanned<Attribute_>;
+
+pub type Attributes = Spanned<Vec<Attribute>>;
 
 //**************************************************************************************************
 // Modules
@@ -94,7 +123,9 @@ pub struct ModuleIdent {
 
 #[derive(Debug, Clone)]
 pub struct ModuleDefinition {
+    pub attributes: Vec<Attributes>,
     pub loc: Loc,
+    pub address: Option<Spanned<Address>>,
     pub name: ModuleName,
     pub members: Vec<ModuleMember>,
 }
@@ -104,8 +135,8 @@ pub enum ModuleMember {
     Function(Function),
     Struct(StructDefinition),
     Spec(SpecBlock),
-    Use(Use),
-    Friend(Friend),
+    Use(UseDecl),
+    Friend(FriendDecl),
     Constant(Constant),
 }
 
@@ -121,6 +152,12 @@ pub enum Friend_ {
 
 pub type Friend = Spanned<Friend_>;
 
+#[derive(Debug, Clone)]
+pub struct FriendDecl {
+    pub attributes: Vec<Attributes>,
+    pub friend: Friend,
+}
+
 //**************************************************************************************************
 // Structs
 //**************************************************************************************************
@@ -132,6 +169,7 @@ pub type ResourceLoc = Option<Loc>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct StructDefinition {
+    pub attributes: Vec<Attributes>,
     pub loc: Loc,
     pub abilities: Vec<Ability>,
     pub name: StructName,
@@ -159,7 +197,7 @@ pub struct FunctionSignature {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-pub enum FunctionVisibility {
+pub enum Visibility {
     Public(Loc),
     Script(Loc),
     Friend(Loc),
@@ -179,8 +217,9 @@ pub type FunctionBody = Spanned<FunctionBody_>;
 //  }
 // (public?) native foo<T1(: copyable?), ..., TN(: copyable?)>(x1: t1, ..., xn: tn): t1 * ... * tn;
 pub struct Function {
+    pub attributes: Vec<Attributes>,
     pub loc: Loc,
-    pub visibility: FunctionVisibility,
+    pub visibility: Visibility,
     pub signature: FunctionSignature,
     pub acquires: Vec<ModuleAccess>,
     pub name: FunctionName,
@@ -195,6 +234,7 @@ new_name!(ConstantName);
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct Constant {
+    pub attributes: Vec<Attributes>,
     pub loc: Loc,
     pub signature: Type,
     pub name: ConstantName,
@@ -209,8 +249,9 @@ pub struct Constant {
 //    SpecBlock = "spec" <SpecBlockTarget> "{" SpecBlockMember* "}"
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpecBlock_ {
+    pub attributes: Vec<Attributes>,
     pub target: SpecBlockTarget,
-    pub uses: Vec<Use>,
+    pub uses: Vec<UseDecl>,
     pub members: Vec<SpecBlockMember>,
 }
 
@@ -243,7 +284,7 @@ pub type PragmaProperty = Spanned<PragmaProperty_>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpecApplyPattern_ {
-    pub visibility: Option<FunctionVisibility>,
+    pub visibility: Option<Visibility>,
     pub name_pattern: Vec<SpecApplyFragment>,
     pub type_parameters: Vec<(Name, Vec<Ability>)>,
 }
@@ -318,6 +359,7 @@ pub enum SpecConditionKind {
     InvariantPack,
     InvariantUnpack,
     InvariantModule,
+    Axiom,
 }
 
 // Specification invariant kind.
@@ -336,7 +378,7 @@ pub enum InvariantKind {
 
 // A ModuleAccess references a local or global name or something from a module,
 // either a struct type or a function.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModuleAccess_ {
     // N
     Name(Name),
@@ -395,7 +437,7 @@ pub type BindList = Spanned<Vec<Bind>>;
 pub type BindWithRange = Spanned<(Bind, Exp)>;
 pub type BindWithRangeList = Spanned<Vec<BindWithRange>>;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value_ {
     // 0x<hex representation up to 64 digits with padding 0s>
     Address(Address),
@@ -567,7 +609,12 @@ pub type Exp = Spanned<Exp_>;
 // { e1; ... ; en }
 // { e1; ... ; en; }
 // The Loc field holds the source location of the final semicolon, if there is one.
-pub type Sequence = (Vec<Use>, Vec<SequenceItem>, Option<Loc>, Box<Option<Exp>>);
+pub type Sequence = (
+    Vec<UseDecl>,
+    Vec<SequenceItem>,
+    Option<Loc>,
+    Box<Option<Exp>>,
+);
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum SequenceItem_ {
@@ -656,7 +703,7 @@ impl Definition {
     pub fn file(&self) -> &'static str {
         match self {
             Definition::Module(m) => m.loc.file(),
-            Definition::Address(loc, _, _) => loc.file(),
+            Definition::Address(_, loc, _, _) => loc.file(),
             Definition::Script(s) => s.loc.file(),
         }
     }
@@ -809,11 +856,20 @@ impl BinOp_ {
     }
 }
 
-impl FunctionVisibility {
+impl Visibility {
     pub const PUBLIC: &'static str = "public";
     pub const SCRIPT: &'static str = "public(script)";
     pub const FRIEND: &'static str = "public(friend)";
     pub const INTERNAL: &'static str = "";
+
+    pub fn loc(&self) -> Option<Loc> {
+        match self {
+            Visibility::Public(loc) | Visibility::Script(loc) | Visibility::Friend(loc) => {
+                Some(*loc)
+            }
+            Visibility::Internal => None,
+        }
+    }
 }
 
 //**************************************************************************************************
@@ -848,16 +904,16 @@ impl fmt::Display for BinOp_ {
     }
 }
 
-impl fmt::Display for FunctionVisibility {
+impl fmt::Display for Visibility {
     fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
             "{}",
             match &self {
-                FunctionVisibility::Public(_) => FunctionVisibility::PUBLIC,
-                FunctionVisibility::Script(_) => FunctionVisibility::SCRIPT,
-                FunctionVisibility::Friend(_) => FunctionVisibility::FRIEND,
-                FunctionVisibility::Internal => FunctionVisibility::INTERNAL,
+                Visibility::Public(_) => Visibility::PUBLIC,
+                Visibility::Script(_) => Visibility::SCRIPT,
+                Visibility::Friend(_) => Visibility::FRIEND,
+                Visibility::Internal => Visibility::INTERNAL,
             }
         )
     }
@@ -899,7 +955,8 @@ impl AstDebug for Program {
 impl AstDebug for Definition {
     fn ast_debug(&self, w: &mut AstWriter) {
         match self {
-            Definition::Address(_, addr, modules) => {
+            Definition::Address(attributes, _, addr, modules) => {
+                attributes.ast_debug(w);
                 w.writeln(&format!("address {} {{", addr));
                 for m in modules {
                     m.ast_debug(w)
@@ -912,15 +969,69 @@ impl AstDebug for Definition {
     }
 }
 
+impl AstDebug for AttributeValue_ {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        match self {
+            AttributeValue_::Value(v) => v.ast_debug(w),
+            AttributeValue_::NumValue(u) => w.write(&format!("{}", u)),
+            AttributeValue_::ModuleAccess(n) => n.ast_debug(w),
+        }
+    }
+}
+
+impl AstDebug for Attribute_ {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        match self {
+            Attribute_::Name(n) => w.write(&format!("{}", n)),
+            Attribute_::Assigned(n, v) => {
+                w.write(&format!("{}", n));
+                w.write(" = ");
+                v.ast_debug(w);
+            }
+            Attribute_::Parameterized(n, inners) => {
+                w.write(&format!("{}", n));
+                w.write("(");
+                w.list(&inners.value, ", ", |w, inner| {
+                    inner.ast_debug(w);
+                    false
+                });
+                w.write(")");
+            }
+        }
+    }
+}
+
+impl AstDebug for Vec<Attribute> {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        w.write("#[");
+        w.list(self, ", ", |w, attr| {
+            attr.ast_debug(w);
+            false
+        });
+        w.write("]");
+    }
+}
+
+impl AstDebug for Vec<Attributes> {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        w.list(self, "", |w, attrs| {
+            attrs.ast_debug(w);
+            true
+        });
+    }
+}
+
 impl AstDebug for Script {
     fn ast_debug(&self, w: &mut AstWriter) {
         let Script {
+            attributes,
             loc: _loc,
             uses,
             constants,
             function,
             specs,
         } = self;
+        attributes.ast_debug(w);
         for u in uses {
             u.ast_debug(w);
             w.new_line();
@@ -942,11 +1053,17 @@ impl AstDebug for Script {
 impl AstDebug for ModuleDefinition {
     fn ast_debug(&self, w: &mut AstWriter) {
         let ModuleDefinition {
+            attributes,
             loc: _loc,
+            address,
             name,
             members,
         } = self;
-        w.write(&format!("module {}", name));
+        attributes.ast_debug(w);
+        match address {
+            None => w.write(&format!("module {}", name)),
+            Some(addr) => w.write(&format!("module {}::{}", addr, name)),
+        };
         w.block(|w| {
             for mem in members {
                 mem.ast_debug(w)
@@ -965,6 +1082,14 @@ impl AstDebug for ModuleMember {
             ModuleMember::Friend(f) => f.ast_debug(w),
             ModuleMember::Constant(c) => c.ast_debug(w),
         }
+    }
+}
+
+impl AstDebug for UseDecl {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        let UseDecl { attributes, use_ } = self;
+        attributes.ast_debug(w);
+        use_.ast_debug(w);
     }
 }
 
@@ -993,6 +1118,14 @@ impl AstDebug for Use {
     }
 }
 
+impl AstDebug for FriendDecl {
+    fn ast_debug(&self, w: &mut AstWriter) {
+        let FriendDecl { attributes, friend } = self;
+        attributes.ast_debug(w);
+        friend.ast_debug(w);
+    }
+}
+
 impl AstDebug for Friend {
     fn ast_debug(&self, w: &mut AstWriter) {
         let Friend {
@@ -1014,12 +1147,14 @@ impl AstDebug for Friend {
 impl AstDebug for StructDefinition {
     fn ast_debug(&self, w: &mut AstWriter) {
         let StructDefinition {
+            attributes,
             loc: _loc,
             abilities,
             name,
             type_parameters,
             fields,
         } = self;
+        attributes.ast_debug(w);
 
         w.list(abilities, " ", |w, ab_mod| {
             ab_mod.ast_debug(w);
@@ -1095,6 +1230,7 @@ impl AstDebug for SpecConditionKind {
             InvariantPack => w.write("invariant pack "),
             InvariantUnpack => w.write("invariant unpack "),
             InvariantModule => w.write("invariant module "),
+            Axiom => w.write("axiom "),
         }
     }
 }
@@ -1228,6 +1364,7 @@ impl AstDebug for PragmaProperty_ {
 impl AstDebug for Function {
     fn ast_debug(&self, w: &mut AstWriter) {
         let Function {
+            attributes,
             loc: _loc,
             visibility,
             signature,
@@ -1235,6 +1372,7 @@ impl AstDebug for Function {
             name,
             body,
         } = self;
+        attributes.ast_debug(w);
         visibility.ast_debug(w);
         if let FunctionBody_::Native = &body.value {
             w.write("native ");
@@ -1253,7 +1391,7 @@ impl AstDebug for Function {
     }
 }
 
-impl AstDebug for FunctionVisibility {
+impl AstDebug for Visibility {
     fn ast_debug(&self, w: &mut AstWriter) {
         w.write(&format!("{} ", self))
     }
@@ -1281,11 +1419,13 @@ impl AstDebug for FunctionSignature {
 impl AstDebug for Constant {
     fn ast_debug(&self, w: &mut AstWriter) {
         let Constant {
+            attributes,
             loc: _loc,
             name,
             signature,
             value,
         } = self;
+        attributes.ast_debug(w);
         w.write(&format!("const {}:", name));
         signature.ast_debug(w);
         w.write(" = ");
@@ -1370,7 +1510,14 @@ impl AstDebug for ModuleAccess_ {
     }
 }
 
-impl AstDebug for (Vec<Use>, Vec<SequenceItem>, Option<Loc>, Box<Option<Exp>>) {
+impl AstDebug
+    for (
+        Vec<UseDecl>,
+        Vec<SequenceItem>,
+        Option<Loc>,
+        Box<Option<Exp>>,
+    )
+{
     fn ast_debug(&self, w: &mut AstWriter) {
         let (uses, seq, _, last_e) = self;
         for u in uses {

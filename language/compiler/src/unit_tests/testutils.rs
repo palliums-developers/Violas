@@ -3,17 +3,16 @@
 
 use anyhow::Result;
 use bytecode_verifier::{verify_module, verify_script};
-use compiled_stdlib::{stdlib_modules, StdLibOptions};
 use ir_to_bytecode::{
     compiler::{compile_module, compile_script},
     parser::{parse_module, parse_script},
 };
-use move_core_types::account_address::AccountAddress;
-use vm::{
+use move_binary_format::{
     access::ScriptAccess,
     errors::{Location, VMError},
     file_format::{CompiledModule, CompiledScript},
 };
+use move_core_types::account_address::AccountAddress;
 
 #[allow(unused_macros)]
 macro_rules! instr_count {
@@ -146,7 +145,5 @@ pub fn compile_script_string_with_stdlib(code: &str) -> Result<CompiledScript> {
 }
 
 fn stdlib() -> Vec<CompiledModule> {
-    stdlib_modules(StdLibOptions::Compiled)
-        .compiled_modules
-        .to_vec()
+    diem_framework_releases::current_modules().to_vec()
 }

@@ -10,18 +10,18 @@ use itertools::Itertools;
 use regex::Regex;
 
 use bytecode_source_map::source_map::SourceMap;
+use move_binary_format::{
+    access::ModuleAccess,
+    file_format::{AbilitySet, Constant, FunctionDefinitionIndex, StructDefinitionIndex},
+    views::{FunctionHandleView, StructHandleView},
+    CompiledModule,
+};
 use move_ir_types::{ast::ConstantName, location::Spanned};
 use move_lang::{
     compiled_unit::{FunctionInfo, SpecInfo},
     expansion::ast as EA,
     parser::ast as PA,
     shared::{unique_map::UniqueMap, Name},
-};
-use vm::{
-    access::ModuleAccess,
-    file_format::{Constant, FunctionDefinitionIndex, StructDefinitionIndex},
-    views::{FunctionHandleView, StructHandleView},
-    CompiledModule,
 };
 
 use crate::{
@@ -36,9 +36,9 @@ use crate::{
     },
     exp_rewriter::{ExpRewriter, RewriteTarget},
     model::{
-        FieldId, FunId, FunctionData, Loc, ModuleId, MoveIrLoc, NamedConstantData, NamedConstantId,
-        NodeId, QualifiedId, SchemaId, SpecFunId, SpecVarId, StructData, StructId, TypeConstraint,
-        TypeParameter, SCRIPT_BYTECODE_FUN_NAME,
+        AbilityConstraint, FieldId, FunId, FunctionData, Loc, ModuleId, MoveIrLoc,
+        NamedConstantData, NamedConstantId, NodeId, QualifiedInstId, SchemaId, SpecFunId,
+        SpecVarId, StructData, StructId, TypeParameter, SCRIPT_BYTECODE_FUN_NAME,
     },
     pragmas::{
         is_pragma_valid_for_block, is_property_valid_for_condition, CONDITION_DEACTIVATED_PROP,
@@ -322,7 +322,7 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         et.enter_scope();
         let params = et.analyze_and_add_params(&def.signature.parameters, true);
         let result_type = et.translate_type(&def.signature.return_type);
-        let is_public = matches!(def.visibility, PA::FunctionVisibility::Public(..));
+        let is_public = matches!(def.visibility, PA::Visibility::Public(..));
         let loc = et.to_loc(&def.loc);
         et.parent.parent.define_fun(
             loc.clone(),
@@ -729,14 +729,12 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
                 // Rewrite all type annotations in expressions to skip references.
                 for node_id in translated.node_ids() {
                     let ty = et.get_node_type(node_id);
-                    et.set_node_type(node_id, ty.skip_reference().clone());
+                    et.update_node_type(node_id, ty.skip_reference().clone());
                 }
                 et.called_spec_funs.iter().for_each(|(mid, fid)| {
                     self.parent.add_edge_to_move_fun_call_graph(
-                        self.module_id,
-                        SpecFunId::new(fun_idx),
-                        *mid,
-                        *fid,
+                        self.module_id.qualified(SpecFunId::new(fun_idx)),
+                        mid.qualified(*fid),
                     );
                 });
                 self.spec_funs[self.spec_fun_index].body = Some(translated);
@@ -914,7 +912,7 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         // In the body of a spec function, references do not appear.
         for node_id in def.node_ids() {
             let ty = et.get_node_type(node_id);
-            et.set_node_type(node_id, ty.skip_reference().clone());
+            et.update_node_type(node_id, ty.skip_reference().clone());
         }
 
         // Prepare the type_params field for SpecFunDecl.
@@ -1528,6 +1526,7 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         match kind {
             PK::Assert => Some((Assert, exp)),
             PK::Assume => Some((Assume, exp)),
+            PK::Axiom => Some((Axiom, exp)),
             PK::Decreases => Some((Decreases, exp)),
             PK::Modifies => Some((Modifies, exp)),
             PK::Emits => Some((Emits, exp)),
@@ -2230,7 +2229,7 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         context_type_params: &[(Symbol, Type)],
         vars: &mut BTreeMap<Symbol, LocalVarEntry>,
     ) -> ExpTranslator<'env, 'translator, 'module_translator> {
-        let mut et = ExpTranslator::new(self);
+        let mut et = ExpTranslator::new_with_old(self, true);
         for (n, ty) in context_type_params {
             et.define_type_param(loc, *n, ty.clone())
         }
@@ -2404,21 +2403,21 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         }
         if let Some(v) = &pattern.value.visibility {
             match v {
-                PA::FunctionVisibility::Public(..) => {
+                PA::Visibility::Public(..) => {
                     if !is_public {
                         return false;
                     }
                 }
-                PA::FunctionVisibility::Internal => {
+                PA::Visibility::Internal => {
                     if is_public {
                         return false;
                     }
                 }
-                PA::FunctionVisibility::Script(..) => {
+                PA::Visibility::Script(..) => {
                     // TODO: model script visibility properly
                     unimplemented!("Script visibility not supported yet")
                 }
-                PA::FunctionVisibility::Friend(..) => {
+                PA::Visibility::Friend(..) => {
                     // TODO: model friend visibility properly
                     unimplemented!("Friend visibility not supported yet")
                 }
@@ -2511,24 +2510,38 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
         mut visited_opt: Option<&mut BTreeSet<usize>>,
         exp: &Exp,
     ) -> (
-        BTreeSet<QualifiedId<SpecVarId>>,
-        BTreeSet<QualifiedId<StructId>>,
+        BTreeSet<QualifiedInstId<SpecVarId>>,
+        BTreeSet<QualifiedInstId<StructId>>,
     ) {
         let mut used_spec_vars = BTreeSet::new();
         let mut used_memory = BTreeSet::new();
         exp.visit(&mut |e: &Exp| {
             match e {
-                Exp::SpecVar(_, mid, vid, _) => {
-                    used_spec_vars.insert(mid.qualified(*vid));
+                Exp::SpecVar(id, mid, vid, _) => {
+                    let inst = self.parent.env.get_node_instantiation(*id);
+                    used_spec_vars.insert(mid.qualified_inst(*vid, inst));
                 }
-                Exp::Call(_, Operation::Function(mid, fid, _), _) => {
+                Exp::Call(id, Operation::Function(mid, fid, _), _) => {
+                    let inst = self.parent.env.get_node_instantiation(*id);
+                    // Extend used memory with that of called functions, after applying type
+                    // instantiation of this call.
                     if mid.to_usize() < self.parent.env.get_module_count() {
                         // This is calling a function from another module we already have
                         // translated.
                         let module_env = self.parent.env.get_module(*mid);
                         let fun_decl = module_env.get_spec_fun(*fid);
-                        used_spec_vars.extend(&fun_decl.used_spec_vars);
-                        used_memory.extend(&fun_decl.used_memory);
+                        used_spec_vars.extend(
+                            fun_decl
+                                .used_spec_vars
+                                .iter()
+                                .map(|id| id.instantiate_ref(&inst)),
+                        );
+                        used_memory.extend(
+                            fun_decl
+                                .used_memory
+                                .iter()
+                                .map(|id| id.instantiate_ref(&inst)),
+                        );
                     } else {
                         // This is calling a function from the module we are currently translating.
                         // Need to recursively ensure we have computed used_spec_vars because of
@@ -2538,19 +2551,28 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
                             self.compute_state_usage_for_fun(visited, fid.as_usize());
                         }
                         let fun_decl = &self.spec_funs[fid.as_usize()];
-                        used_spec_vars.extend(&fun_decl.used_spec_vars);
-                        used_memory.extend(&fun_decl.used_memory);
+                        used_spec_vars.extend(
+                            fun_decl
+                                .used_spec_vars
+                                .iter()
+                                .map(|id| id.instantiate_ref(&inst)),
+                        );
+                        used_memory.extend(
+                            fun_decl
+                                .used_memory
+                                .iter()
+                                .map(|id| id.instantiate_ref(&inst)),
+                        );
                     }
                 }
                 Exp::Call(node_id, Operation::Global(_), _)
                 | Exp::Call(node_id, Operation::Exists(_), _) => {
-                    let env = &self.parent.env;
-                    if !env.has_errors() {
+                    if !self.parent.env.has_errors() {
                         // We would crash if the type is not valid, so only do this if no errors
                         // have been reported so far.
-                        let ty = &env.get_node_instantiation(*node_id)[0];
-                        let (mid, sid, _) = ty.require_struct();
-                        used_memory.insert(mid.qualified(sid));
+                        let ty = &self.parent.env.get_node_instantiation(*node_id)[0];
+                        let (mid, sid, inst) = ty.require_struct();
+                        used_memory.insert(mid.qualified_inst(sid, inst.to_owned()));
                     }
                 }
                 _ => {}
@@ -2566,6 +2588,9 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
     /// Reduce module invariants by making them requires/ensures on each function.
     fn reduce_module_invariants(&mut self) {
         for mut cond in self.module_spec.conditions.iter().cloned().collect_vec() {
+            if cond.kind == ConditionKind::Axiom {
+                continue;
+            }
             if self
                 .parent
                 .env
@@ -2669,7 +2694,9 @@ impl<'env, 'translator> ModuleBuilder<'env, 'translator> {
                         entry
                             .type_params
                             .iter()
-                            .map(|(name, _)| TypeParameter(*name, TypeConstraint::None))
+                            .map(|(name, _)| {
+                                TypeParameter(*name, AbilityConstraint(AbilitySet::EMPTY))
+                            })
                             .collect_vec(),
                     )
                 }

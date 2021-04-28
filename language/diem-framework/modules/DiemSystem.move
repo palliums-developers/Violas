@@ -39,7 +39,7 @@ module DiemSystem {
     /// modify the DiemSystem config. This is only needed by `update_config_and_reconfigure`.
     /// Only Diem root can add or remove a validator from the validator set, so the
     /// capability is not needed for access control in those functions.
-    struct CapabilityHolder has key, store {
+    struct CapabilityHolder has key {
         /// Holds a capability returned by `DiemConfig::publish_new_config_and_get_capability`
         /// which is called in `initialize_validator_set`.
         cap: ModifyConfigCapability<DiemSystem>,
@@ -319,13 +319,14 @@ module DiemSystem {
                 v_info.addr == validator_addr
                 && v_info.config != ValidatorConfig::spec_get_config(validator_addr));
         include is_validator_info_updated ==> DiemConfig::ReconfigureAbortsIf;
+        include UpdateConfigAndReconfigureEmits;
     }
     spec schema UpdateConfigAndReconfigureAbortsIf {
         validator_addr: address;
         validator_operator_account: signer;
         let validator_operator_addr = Signer::address_of(validator_operator_account);
         include DiemTimestamp::AbortsIfNotOperating;
-        /// Must abort if the signer does not have the ValidatorOperator role [[H14]][PERMISSION].
+        /// Must abort if the signer does not have the ValidatorOperator role [[H15]][PERMISSION].
         include Roles::AbortsIfNotValidatorOperator{validator_operator_addr: validator_operator_addr};
         include ValidatorConfig::AbortsIfNoValidatorConfig{addr: validator_addr};
         aborts_if ValidatorConfig::get_operator(validator_addr) != validator_operator_addr
@@ -571,7 +572,7 @@ module DiemSystem {
     /// `update_config_and_reconfigure`.
 
     spec module {
-       /// The permission "{Add, Remove} Validator" is granted to DiemRoot [[H13]][PERMISSION].
+       /// The permission "{Add, Remove} Validator" is granted to DiemRoot [[H14]][PERMISSION].
        apply Roles::AbortsIfNotDiemRoot{account: dr_account} to add_validator, remove_validator;
     }
 
@@ -579,8 +580,8 @@ module DiemSystem {
         ensures spec_get_validators() == old(spec_get_validators());
     }
     spec module {
-        /// Only {add, remove} validator [[H13]][PERMISSION] and update_config_and_reconfigure
-        /// [[H14]][PERMISSION] may change the set of validators in the configuration.
+        /// Only {add, remove} validator [[H14]][PERMISSION] and update_config_and_reconfigure
+        /// [[H15]][PERMISSION] may change the set of validators in the configuration.
         /// `set_diem_system_config` is a private function which is only called by other
         /// functions in the "except" list. `initialize_validator_set` is only called in
         /// Genesis.

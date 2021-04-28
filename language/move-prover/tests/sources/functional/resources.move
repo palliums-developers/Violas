@@ -1,4 +1,4 @@
-module TestResources {
+module 0x42::TestResources {
     use 0x1::Signer;
 
     spec module {
@@ -262,4 +262,18 @@ module TestResources {
         ensures result == B{ a: A{ addr: Signer::spec_address_of(account), val: 7 }, val: 77 };
         ensures result == B{ a: A{ val: 7, addr: Signer::spec_address_of(account)}, val: 77 };
     }
+
+    // ------------
+    // Empty struct
+    // ------------
+
+    struct Empty {}
+
+    public fun create_empty(): Empty {
+        Empty{}
+    }
+    spec fun create_empty {
+        ensures result == Empty{};
+    }
+
 }

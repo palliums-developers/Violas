@@ -32,7 +32,6 @@ use futures::{
     stream::select_all,
     StreamExt,
 };
-use netcore::transport::ConnectionOrigin;
 use network::{protocols::network::Event, transport::ConnectionMetadata};
 use std::{
     cmp,
@@ -198,7 +197,7 @@ impl<T: ExecutorProxyTrait> StateSyncCoordinator<T> {
                             }
                         }
                         Event::LostPeer(metadata) => {
-                            if let Err(e) = self.process_lost_peer(network_id, metadata.remote_peer_id, metadata.origin) {
+                            if let Err(e) = self.process_lost_peer(network_id, metadata.remote_peer_id) {
                                 error!(LogSchema::new(LogEntry::LostPeer).error(&e));
                             }
                         }
@@ -238,10 +237,9 @@ impl<T: ExecutorProxyTrait> StateSyncCoordinator<T> {
         &mut self,
         network_id: NodeNetworkId,
         peer_id: PeerId,
-        origin: ConnectionOrigin,
     ) -> Result<(), Error> {
         let peer = PeerNetworkId(network_id, peer_id);
-        self.request_manager.disable_peer(&peer, origin)
+        self.request_manager.disable_peer(&peer)
     }
 
     pub(crate) async fn process_chunk_message(
@@ -358,7 +356,7 @@ impl<T: ExecutorProxyTrait> StateSyncCoordinator<T> {
 
         let local_li_version = self.local_state.committed_version();
         let target_version = request.target.ledger_info().version();
-        debug!(
+        info!(
             LogSchema::event_log(LogEntry::SyncRequest, LogEvent::Received)
                 .target_version(target_version)
                 .local_li_version(local_li_version)
@@ -372,7 +370,7 @@ impl<T: ExecutorProxyTrait> StateSyncCoordinator<T> {
         }
 
         if target_version == local_li_version {
-            return Ok(Self::send_sync_req_callback(request, Ok(()))?);
+            return Self::send_sync_req_callback(request, Ok(()));
         }
         if target_version < local_li_version {
             Self::send_sync_req_callback(
@@ -514,7 +512,7 @@ impl<T: ExecutorProxyTrait> StateSyncCoordinator<T> {
                 ));
             }
             if synced_version == sync_target_version {
-                debug!(
+                info!(
                     LogSchema::event_log(LogEntry::SyncRequest, LogEvent::Complete)
                         .local_li_version(committed_version)
                         .local_synced_version(synced_version)
@@ -664,7 +662,7 @@ impl<T: ExecutorProxyTrait> StateSyncCoordinator<T> {
             return Err(error);
         }
 
-        let result = match request.target.clone() {
+        match request.target.clone() {
             TargetType::TargetLedgerInfo(li) => {
                 self.process_request_for_target_and_highest(peer, request, Some(li), None)
             }
@@ -680,8 +678,7 @@ impl<T: ExecutorProxyTrait> StateSyncCoordinator<T> {
             TargetType::Waypoint(waypoint_version) => {
                 self.process_request_for_waypoint(peer, request, waypoint_version)
             }
-        };
-        Ok(result?)
+        }
     }
 
     fn verify_chunk_request_is_valid(&mut self, request: &GetChunkRequest) -> Result<(), Error> {
@@ -1083,8 +1080,8 @@ impl<T: ExecutorProxyTrait> StateSyncCoordinator<T> {
         peer: &PeerNetworkId,
         response: &GetChunkResponse,
     ) -> Result<(), Error> {
-        // Verify response comes from upstream peer
-        if !self.request_manager.is_known_upstream_peer(peer) {
+        // Verify response comes from known peer
+        if !self.request_manager.is_known_state_sync_peer(peer) {
             counters::RESPONSE_FROM_DOWNSTREAM_COUNT
                 .with_label_values(&[
                     &peer.raw_network_id().to_string(),
@@ -1578,7 +1575,7 @@ impl<T: ExecutorProxyTrait> StateSyncCoordinator<T> {
         counters::set_version(counters::VersionType::Target, target_version);
 
         let req = GetChunkRequest::new(known_version, known_epoch, self.config.chunk_limit, target);
-        Ok(self.request_manager.send_chunk_request(req)?)
+        self.request_manager.send_chunk_request(req)
     }
 
     fn deliver_subscription(
@@ -1952,12 +1949,12 @@ mod tests {
             ConnectionOrigin::Inbound,
         );
 
-        // Verify error is returned when adding peer that is not upstream
+        // Verify error is returned when adding peer that is not a valid peer
         let new_peer_result =
             validator_coordinator.process_new_peer(node_network_id, connection_metadata.clone());
-        if !matches!(new_peer_result, Err(Error::PeerIsNotUpstream(..))) {
+        if !matches!(new_peer_result, Err(Error::InvalidStateSyncPeer(..))) {
             panic!(
-                "Expected a peer is not upstream error but got: {:?}",
+                "Expected an invalid peer error but got: {:?}",
                 new_peer_result
             );
         }
@@ -1966,16 +1963,16 @@ mod tests {
         let node_network_id = NodeNetworkId::new(NetworkId::Validator, 0);
         let new_peer_result =
             validator_coordinator.process_new_peer(node_network_id.clone(), connection_metadata);
-        if matches!(new_peer_result, Err(Error::PeerIsNotUpstream(..))) {
+        if matches!(new_peer_result, Err(Error::InvalidStateSyncPeer(..))) {
             panic!(
-                "Expected not to receive a peer is not upstream error but got: {:?}",
+                "Expected not to receive an invalid peer error but got: {:?}",
                 new_peer_result
             );
         }
 
         // Verify no error is returned when removing the node
         validator_coordinator
-            .process_lost_peer(node_network_id, peer_id, ConnectionOrigin::Outbound)
+            .process_lost_peer(node_network_id, peer_id)
             .unwrap();
     }
 
@@ -2098,7 +2095,7 @@ mod tests {
             }
         }
 
-        // Add the peer to our upstreams
+        // Add the peer to our known peers
         process_new_peer_event(&mut validator_coordinator, &peer_network_id);
 
         // Verify we now get an empty chunk error
@@ -2132,7 +2129,7 @@ mod tests {
         // Create a coordinator for a full node
         let mut full_node_coordinator = test_utils::create_full_node_coordinator();
 
-        // Create a peer for the node and add the peer as an upstream
+        // Create a peer for the node and add the peer as a known peer
         let peer_network_id = PeerNetworkId::random_validator();
         process_new_peer_event(&mut full_node_coordinator, &peer_network_id);
 
@@ -2180,7 +2177,7 @@ mod tests {
         // Create a coordinator for a validator
         let mut validator_coordinator = test_utils::create_validator_coordinator();
 
-        // Create a peer for the node and add the peer as an upstream
+        // Create a peer for the node and add the peer as a known peer
         let peer_network_id = PeerNetworkId::random_validator();
         process_new_peer_event(&mut validator_coordinator, &peer_network_id);
 
@@ -2231,7 +2228,7 @@ mod tests {
         let mut validator_coordinator =
             create_coordinator_with_config_and_waypoint(NodeConfig::default(), waypoint);
 
-        // Create a peer for the node and add the peer as an upstream
+        // Create a peer for the node and add the peer as a known peer
         let peer_network_id = PeerNetworkId::random_validator();
         process_new_peer_event(&mut validator_coordinator, &peer_network_id);
 

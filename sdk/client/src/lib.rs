@@ -17,11 +17,21 @@ cfg_async! {
     pub use client::Client;
 }
 
+cfg_faucet! {
+    mod faucet;
+    pub use faucet::FaucetClient;
+}
+
 mod request;
 pub use request::{JsonRpcRequest, MethodRequest};
 
 mod response;
 pub use response::{MethodResponse, Response};
+
+cfg_async_or_blocking! {
+    mod move_deserialize;
+    pub use move_deserialize::Event;
+}
 
 mod state;
 pub use state::State;

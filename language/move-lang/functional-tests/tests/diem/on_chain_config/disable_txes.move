@@ -9,7 +9,8 @@
 //! sender: diemroot
 script {
 use 0x1::DiemTransactionPublishingOption;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     DiemTransactionPublishingOption::halt_all_transactions(account);
 }
 }
@@ -26,7 +27,7 @@ fun main() {
 // sending allowlisted script from normal account fails
 //! new-transaction
 //! args: b""
-stdlib_script::rotate_authentication_key
+stdlib_script::AccountAdministrationScripts::rotate_authentication_key
 // check: "Discard(UNKNOWN_SCRIPT)"
 
 //! block-prologue
@@ -38,7 +39,8 @@ stdlib_script::rotate_authentication_key
 //! sender: diemroot
 script {
 use 0x1::DiemTransactionPublishingOption;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     DiemTransactionPublishingOption::resume_transactions(account);
 }
 }
@@ -47,14 +49,15 @@ fun main(account: &signer) {
 // sending from normal account succeeds again
 //! new-transaction
 //! args: b""
-stdlib_script::rotate_authentication_key
+stdlib_script::AccountAdministrationScripts::rotate_authentication_key
 // check: "Keep(ABORTED { code: 2055,"
 
 // A normal account has insufficient privs to halt transactions
 //! new-transaction
 script {
 use 0x1::DiemTransactionPublishingOption;
-fun main(account: &signer) {
+fun main(account: signer) {
+    let account = &account;
     DiemTransactionPublishingOption::halt_all_transactions(account);
 }
 }

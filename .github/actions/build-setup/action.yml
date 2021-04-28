@@ -44,8 +44,10 @@ runs:
         # prepare move lang prover tooling.
         # By setting these values the dev-setup.sh script can detect already installed executables (and check versions).
         echo 'Z3_EXE='${HOME}/bin/z3 | tee -a $GITHUB_ENV
+        echo 'CVC4_EXE='${HOME}/bin/cvc4 | tee -a $GITHUB_ENV
         echo 'DOTNET_ROOT='${HOME}/.dotnet/ | tee -a $GITHUB_ENV
         echo 'BOOGIE_EXE='${HOME}/.dotnet/tools/boogie | tee -a $GITHUB_ENV
+        echo 'MVP_TEST_ON_CI'='1' | tee -a $GITHUB_ENV
         echo "$HOME/bin" | tee -a $GITHUB_PATH
         echo "$HOME/.dotnet" | tee -a $GITHUB_PATH
         echo "/opt/cargo/bin" | tee -a $GITHUB_PATH
@@ -59,12 +61,3 @@ runs:
         echo 'RUST_BACKTRACE=1' | tee -a $GITHUB_ENV
         echo 'DIEM_DUMP_LOGS=1' | tee -a $GITHUB_ENV
         echo 'CARGO_INCREMENTAL=0' | tee -a $GITHUB_ENV
-        echo 'RUST_NIGHTLY='$(cat cargo-toolchain) | tee -a $GITHUB_ENV
-
-        # Turn on the experimental feature resolver in cargo. See:
-        # https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#features
-        echo 'CARGOFLAGS='$(cat cargo-flags) | tee -a $GITHUB_ENV
-        # Use nightly version of cargo to access the new feature resolver
-        echo 'CARGO='$(rustup which cargo --toolchain "$(cat cargo-toolchain)") | tee -a $GITHUB_ENV
-        # Pin the version of RUSTC used for all invocations of cargo
-        echo 'RUSTUP_TOOLCHAIN='$(cat rust-toolchain) | tee -a $GITHUB_ENV

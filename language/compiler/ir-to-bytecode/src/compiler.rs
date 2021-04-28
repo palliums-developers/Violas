@@ -7,6 +7,17 @@ use crate::{
 };
 use anyhow::{bail, format_err, Result};
 use bytecode_source_map::source_map::SourceMap;
+use move_binary_format::{
+    errors::Location as VMErrorLocation,
+    file_format::{
+        Ability, AbilitySet, Bytecode, CodeOffset, CodeUnit, CompiledModule, CompiledModuleMut,
+        CompiledScript, CompiledScriptMut, Constant, FieldDefinition, FunctionDefinition,
+        FunctionSignature, ModuleHandle, Signature, SignatureToken, StructDefinition,
+        StructDefinitionIndex, StructFieldInformation, StructHandleIndex, TableIndex,
+        TypeParameterIndex, TypeSignature, Visibility,
+    },
+    file_format_common::VERSION_MAX,
+};
 use move_core_types::{
     account_address::AccountAddress,
     value::{MoveTypeLayout, MoveValue},
@@ -21,16 +32,6 @@ use std::{
     collections::{
         hash_map::Entry::{Occupied, Vacant},
         BTreeSet, HashMap, VecDeque,
-    },
-};
-use vm::{
-    errors::Location as VMErrorLocation,
-    file_format::{
-        Ability, AbilitySet, Bytecode, CodeOffset, CodeUnit, CompiledModule, CompiledModuleMut,
-        CompiledScript, CompiledScriptMut, Constant, FieldDefinition, FunctionDefinition,
-        FunctionSignature, ModuleHandle, Signature, SignatureToken, StructDefinition,
-        StructDefinitionIndex, StructFieldInformation, StructHandleIndex, TableIndex,
-        TypeParameterIndex, TypeSignature, Visibility,
     },
 };
 
@@ -461,6 +462,7 @@ pub fn compile_script<'a>(
         source_map,
     ) = context.materialize_pools();
     let compiled_script = CompiledScriptMut {
+        version: VERSION_MAX,
         module_handles,
         struct_handles,
         function_handles,
@@ -559,6 +561,7 @@ pub fn compile_module<'a>(
         source_map,
     ) = context.materialize_pools();
     let compiled_module = CompiledModuleMut {
+        version: VERSION_MAX,
         module_handles,
         self_module_handle_idx,
         struct_handles,
@@ -638,6 +641,7 @@ fn compile_explicit_dependency_declarations(
             _source_map,
         ) = context.materialize_pools();
         let compiled_module = CompiledModuleMut {
+            version: VERSION_MAX,
             module_handles,
             self_module_handle_idx,
             struct_handles,
@@ -832,7 +836,7 @@ fn function_signature(
         .iter()
         .map(|(_, abs)| abilities(abs))
         .collect();
-    Ok(vm::file_format::FunctionSignature {
+    Ok(move_binary_format::file_format::FunctionSignature {
         return_,
         parameters,
         type_parameters,

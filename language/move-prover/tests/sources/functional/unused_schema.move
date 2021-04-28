@@ -1,5 +1,5 @@
-// flag: --warn
-module TestUnusedSchema {
+// flag: --severity=note
+module 0x42::TestUnusedSchema {
 
     spec module {
         pragma verify = true;

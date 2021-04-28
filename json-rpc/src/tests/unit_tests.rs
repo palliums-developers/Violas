@@ -8,7 +8,9 @@ use crate::{
         genesis::generate_genesis_state,
         utils::{test_bootstrap, MockDiemDB},
     },
-    util::{sdk_language_from_user_agent, vm_status_view_from_kept_vm_status, SdkLang},
+    util::{
+        sdk_info_from_user_agent, vm_status_view_from_kept_vm_status, SdkInfo, SdkLang, SdkVersion,
+    },
 };
 use diem_client::{views::TransactionDataView, BlockingClient, MethodRequest};
 use diem_config::{config::DEFAULT_CONTENT_LENGTH_LIMIT, utils};
@@ -289,11 +291,11 @@ fn test_json_rpc_protocol_invalid_requests() {
         ),
         (
             "invalid arguments: too many arguments",
-            json!({"jsonrpc": "2.0", "method": "get_account", "params": [1, 2], "id": 1}),
+            json!({"jsonrpc": "2.0", "method": "get_currencies", "params": [1, 2], "id": 1}),
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid params: wrong number of arguments (given 2, expected 1)",
+                    "message": "Invalid params for method 'get_currencies'",
                     "data": null
                 },
                 "id": 1,
@@ -305,11 +307,11 @@ fn test_json_rpc_protocol_invalid_requests() {
         ),
         (
             "invalid arguments: not enough arguments",
-            json!({"jsonrpc": "2.0", "method": "get_account", "id": 1}),
+            json!({"jsonrpc": "2.0", "method": "get_events", "id": 1}),
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid params: wrong number of arguments (given 0, expected 1)",
+                    "message": "Invalid params for method 'get_events'",
                     "data": null
                 },
                 "id": 1,
@@ -325,7 +327,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid params: wrong number of arguments (given 2, expected 0..1)",
+                    "message": "Invalid params for method 'get_metadata'",
                     "data": null
                 },
                 "id": 1,
@@ -341,7 +343,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": format!("Invalid param version(params[0]): should be <= known latest version {}", version),
+                    "message": format!("Invalid param version should be <= known latest version {}", version),
                     "data": null
                 },
                 "id": 1,
@@ -357,7 +359,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account address(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_account'",
                     "data": null
                 },
                 "id": 1,
@@ -373,7 +375,23 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account address(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_account'",
+                    "data": null
+                },
+                "id": 1,
+                "jsonrpc": "2.0",
+                "diem_chain_id": ChainId::test().id(),
+                "diem_ledger_timestampusec": timestamp,
+                "diem_ledger_version": version
+            }),
+        ),
+        (
+            "get_account: invalid version param type",
+            json!({"jsonrpc": "2.0", "method": "get_account", "params": ["e1b3d22871989e9fd9dc6814b2f4fc41", true], "id": 1}),
+            json!({
+                "error": {
+                    "code": -32602,
+                    "message": "Invalid params for method 'get_account'",
                     "data": null
                 },
                 "id": 1,
@@ -389,7 +407,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param data(params[0]): should be hex-encoded string of BCS serialized Diem SignedTransaction type",
+                    "message": "Invalid params for method 'submit'",
                     "data": null
                 },
                 "id": 1,
@@ -405,7 +423,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param start_version(params[0]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -433,7 +451,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param limit(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -449,7 +467,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param include_events(params[2]): should be boolean",
+                    "message": "Invalid params for method 'get_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -465,7 +483,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param start_version(params[0]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_transactions_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -493,7 +511,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param limit(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_transactions_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -525,7 +543,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param event key(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_events'",
                     "data": null
                 },
                 "id": 1,
@@ -541,7 +559,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param event key(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_events'",
                     "data": null
                 },
                 "id": 1,
@@ -557,7 +575,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param start(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_events'",
                     "data": null
                 },
                 "id": 1,
@@ -585,7 +603,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param limit(params[2]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_events'",
                     "data": null
                 },
                 "id": 1,
@@ -601,7 +619,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param event key(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_events_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -617,7 +635,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param event key(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_events_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -633,7 +651,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param start(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_events_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -649,7 +667,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param limit(params[2]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_events_with_proofs'",
                     "data": null
                 },
                 "id": 1,
@@ -665,7 +683,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account address(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_account_transaction'",
                     "data": null
                 },
                 "id": 1,
@@ -681,7 +699,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account sequence number(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_account_transaction'",
                     "data": null
                 },
                 "id": 1,
@@ -697,7 +715,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param include_events(params[2]): should be boolean",
+                    "message": "Invalid params for method 'get_account_transaction'",
                     "data": null
                 },
                 "id": 1,
@@ -725,7 +743,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account address(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_account_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -757,7 +775,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param start(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_account_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -785,7 +803,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param limit(params[2]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_account_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -801,7 +819,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param include_events(params[3]): should be boolean",
+                    "message": "Invalid params for method 'get_account_transactions'",
                     "data": null
                 },
                 "id": 1,
@@ -817,7 +835,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param version(params[0]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_state_proof'",
                     "data": null
                 },
                 "id": 1,
@@ -833,7 +851,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": format!("Invalid param version(params[0]): should be <= known latest version {}", version),
+                    "message": format!("Invalid param version should be <= known latest version {}", version),
                     "data": null
                 },
                 "id": 1,
@@ -849,7 +867,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param account address(params[0]): should be hex-encoded string",
+                    "message": "Invalid params for method 'get_account_state_with_proof'",
                     "data": null
                 },
                 "id": 1,
@@ -865,7 +883,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param version(params[1]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_account_state_with_proof'",
                     "data": null
                 },
                 "id": 1,
@@ -897,7 +915,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": format!("Invalid param ledger version for proof(params[2]): should be <= known latest version {}", version),
+                    "message": format!("Invalid param ledger_version should be <= known latest version {}", version),
                     "data": null
                 },
                 "id": 1,
@@ -913,7 +931,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": "Invalid param ledger version for proof(params[2]): should be unsigned int64",
+                    "message": "Invalid params for method 'get_account_state_with_proof'",
                     "data": null
                 },
                 "id": 1,
@@ -929,7 +947,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": format!("Invalid param version(params[1]): should be <= known latest version {}", version),
+                    "message": format!("Invalid param version should be <= known latest version {}", version),
                     "data": null
                 },
                 "id": 1,
@@ -945,7 +963,7 @@ fn test_json_rpc_protocol_invalid_requests() {
             json!({
                 "error": {
                     "code": -32602,
-                    "message": format!("Invalid param ledger version for proof(params[2]): should be <= known latest version {}", version),
+                    "message": format!("Invalid param ledger_version should be <= known latest version {}", version),
                     "data": null
                 },
                 "id": 1,
@@ -953,27 +971,6 @@ fn test_json_rpc_protocol_invalid_requests() {
                 "diem_chain_id": ChainId::test().id(),
                 "diem_ledger_timestampusec": timestamp,
                 "diem_ledger_version": version
-            }),
-        ),
-        (
-            "id not given",
-            json!({"jsonrpc": "2.0", "method": "get_metadata"}),
-            json!({
-                "id": null,
-                "jsonrpc": "2.0",
-                "diem_chain_id": ChainId::test().id(),
-                "diem_ledger_timestampusec": timestamp,
-                "diem_ledger_version": version,
-                "result": {
-                    "chain_id": ChainId::test().id(),
-                    "timestamp": timestamp,
-                    "version": version,
-                    "script_hash_allow_list": [],
-                    "module_publishing_allowed": true,
-                    "diem_version": 1,
-                    "accumulator_root_hash": "0000000000000000000000000000000000000000000000000000000000000000",
-                    "dual_attestation_limit": 1000000000,
-                }
             }),
         ),
     ];
@@ -1039,7 +1036,10 @@ fn test_metrics() {
             json!({"jsonrpc": "2.0", "method": "get_currencies", "params": ["invalid"], "id": 1}),
         ),
     ];
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::ClientBuilder::new()
+        .user_agent("diem-client-sdk-python / 2.11.15")
+        .build()
+        .expect("Client::new()");
     for (_name, request) in calls {
         let _ = client.post(&url).json(&request).send();
     }
@@ -1053,12 +1053,12 @@ fn test_metrics() {
         "diem_client_service_rpc_request_latency_seconds{type=single}",
         "diem_client_service_rpc_request_latency_seconds{type=batch}",
         // method request count
-        "diem_client_service_requests_count{method=get_currencies,result=success,sdk_lang=unknown,type=single}",
+        "diem_client_service_requests_count{method=get_currencies,result=success,sdk_lang=python,sdk_ver=2.11.15,type=single}",
         // method latency
         "diem_client_service_method_latency_seconds{method=get_currencies,type=single}",
         "diem_client_service_method_latency_seconds{method=get_currencies,type=batch}",
         // invalid params
-        "diem_client_service_invalid_requests_count{errortype=invalid_params,method=get_currencies,sdk_lang=unknown,type=single}",
+        "diem_client_service_invalid_requests_count{errortype=invalid_params,method=get_currencies,sdk_lang=python,sdk_ver=2.11.15,type=single}",
     ];
 
     for name in expected_metrics {
@@ -1528,20 +1528,58 @@ fn test_health_check() {
 }
 
 #[test]
-fn test_sdk_language_from_user_agent() {
-    assert_eq!(sdk_language_from_user_agent(None), SdkLang::Unknown);
-    assert_eq!(sdk_language_from_user_agent(Some("")), SdkLang::Unknown);
+fn test_sdk_info_from_user_agent() {
+    // Invalid user agents:
+    assert_eq!(sdk_info_from_user_agent(None), SdkInfo::default());
+    assert_eq!(sdk_info_from_user_agent(Some("")), SdkInfo::default());
+    // If we have a bad language, don't trust the version
     assert_eq!(
-        sdk_language_from_user_agent(Some("diem-client-SdK-JaVa/ 213.21.2")),
-        SdkLang::Java
+        sdk_info_from_user_agent(Some("very-custom-unreal / 1.1.1")),
+        SdkInfo::default()
+    );
+    // If we have a bad version, don't trust the language
+    assert_eq!(
+        sdk_info_from_user_agent(Some("diem-client-sdk-python / 0.12.223")),
+        SdkInfo::default()
     );
     assert_eq!(
-        sdk_language_from_user_agent(Some("diem-client-sdk-python / 0.1.22")),
-        SdkLang::Python
+        sdk_info_from_user_agent(Some("diem-client-sdk-python / 105.12.22")),
+        SdkInfo::default()
+    );
+
+    // Valid user agents:
+    assert_eq!(
+        sdk_info_from_user_agent(Some("diem-client-SdK-JaVa/ 3.21.09")),
+        SdkInfo {
+            language: SdkLang::Java,
+            version: SdkVersion {
+                major: 3,
+                minor: 21,
+                patch: 9
+            }
+        }
     );
     assert_eq!(
-        sdk_language_from_user_agent(Some("very-custom ! user-agent")),
-        SdkLang::Unknown
+        sdk_info_from_user_agent(Some("diem-client-SdK-cpp/3.21.09")),
+        SdkInfo {
+            language: SdkLang::Cpp,
+            version: SdkVersion {
+                major: 3,
+                minor: 21,
+                patch: 9
+            }
+        }
+    );
+    assert_eq!(
+        sdk_info_from_user_agent(Some("diem-client-sdk-python / 0.1.22")),
+        SdkInfo {
+            language: SdkLang::Python,
+            version: SdkVersion {
+                major: 0,
+                minor: 1,
+                patch: 22
+            }
+        }
     );
 }
 

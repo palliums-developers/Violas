@@ -59,6 +59,8 @@ message Account {
   bool is_frozen = 9 [json_name="delegated_withdrawal_capability"];
 
   AccountRole role = 10;
+  // the transaction version of the account
+  uint64 version = 11;
 }
 
 message AccountRole {
@@ -86,7 +88,13 @@ message AccountRole {
 
 message PreburnQueue {
     string currency  = 1 [json_name="currency"];
-    repeated Amount preburns = 2 [json_name="preburns"];
+    repeated PreburnWithMetadata preburns = 2 [json_name="preburns"];
+}
+
+message PreburnWithMetadata {
+    Amount preburn = 1 [json_name="preburn"];
+    // hex-encoded bytes
+    string metadata = 2 [json_name="metadata"];
 }
 
 message Event {
@@ -159,6 +167,12 @@ message EventData {
    * It is created by validators.
    */
   uint64 committed_timestamp_secs = 20 [json_name="committed_timestamp_secs"];
+
+  /**
+   * unknown event field.
+   * Hex-encoded BCS bytes of the event data.
+   */
+  string bytes = 21;
 }
 
 message Metadata {
@@ -333,6 +347,11 @@ message Script {
   * with name `module_name` published under the `module_address` account address.
   */
   string function_name = 12;
+  /**
+   * List of hex-encoded string of BCS bytes representing script function arguments.
+   * This field does not contain type information.
+   */
+  repeated string arguments_bcs = 13 [json_name="arguments_bcs"];
 }
 
 message CurrencyInfo {

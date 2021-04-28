@@ -3,6 +3,18 @@
 
 use anyhow::{bail, format_err, Result};
 use bytecode_source_map::source_map::SourceMap;
+use move_binary_format::{
+    access::ModuleAccess,
+    file_format::{
+        AbilitySet, AddressIdentifierIndex, CodeOffset, Constant, ConstantPoolIndex, FieldHandle,
+        FieldHandleIndex, FieldInstantiation, FieldInstantiationIndex, FunctionDefinitionIndex,
+        FunctionHandle, FunctionHandleIndex, FunctionInstantiation, FunctionInstantiationIndex,
+        FunctionSignature, IdentifierIndex, ModuleHandle, ModuleHandleIndex, Signature,
+        SignatureIndex, SignatureToken, StructDefInstantiation, StructDefInstantiationIndex,
+        StructDefinitionIndex, StructHandle, StructHandleIndex, TableIndex,
+    },
+    CompiledModule,
+};
 use move_core_types::{
     account_address::AccountAddress,
     identifier::{IdentStr, Identifier},
@@ -15,18 +27,6 @@ use move_ir_types::{
     location::*,
 };
 use std::{clone::Clone, collections::HashMap, hash::Hash};
-use vm::{
-    access::ModuleAccess,
-    file_format::{
-        AbilitySet, AddressIdentifierIndex, CodeOffset, Constant, ConstantPoolIndex, FieldHandle,
-        FieldHandleIndex, FieldInstantiation, FieldInstantiationIndex, FunctionDefinitionIndex,
-        FunctionHandle, FunctionHandleIndex, FunctionInstantiation, FunctionInstantiationIndex,
-        FunctionSignature, IdentifierIndex, ModuleHandle, ModuleHandleIndex, Signature,
-        SignatureIndex, SignatureToken, StructDefInstantiation, StructDefInstantiationIndex,
-        StructDefinitionIndex, StructHandle, StructHandleIndex, TableIndex,
-    },
-    CompiledModule,
-};
 
 macro_rules! get_or_add_item_macro {
     ($m:ident, $k_get:expr, $k_insert:expr) => {{
@@ -164,7 +164,7 @@ use rental::rental;
 rental! {
     mod rent_stored_compiled_dependency {
         use super::CompiledDependencyView;
-        use vm::file_format::CompiledModule;
+        use move_binary_format::file_format::CompiledModule;
 
         #[rental(covariant)]
         pub(crate) struct StoredCompiledDependency {
@@ -491,7 +491,7 @@ impl<'a> Context<'a> {
 
     /// Get the fake offset for the label. Labels will be fixed to real offsets after compilation
     pub fn label_index(&mut self, label: BlockLabel) -> Result<CodeOffset> {
-        Ok(get_or_add_item(&mut self.labels, label)?)
+        get_or_add_item(&mut self.labels, label)
     }
 
     /// Get the identifier pool index, adds it if missing.

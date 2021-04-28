@@ -1,6 +1,8 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
-use crate::release_flow::{create::create_release_from_artifact, hash_for_modules, load_artifact};
+use crate::release_flow::{
+    create::create_release_from_artifact, hash_for_modules, load_latest_artifact,
+};
 use anyhow::{bail, Result};
 use diem_transaction_replay::DiemDebugger;
 use diem_types::{
@@ -10,9 +12,9 @@ use diem_types::{
     write_set::WriteOp,
 };
 use diem_validator_interface::{DiemValidatorInterface, JsonRpcDebuggerInterface};
+use move_binary_format::CompiledModule;
 use move_core_types::vm_status::KeptVMStatus;
 use std::collections::BTreeMap;
-use vm::CompiledModule;
 
 pub fn verify_release(
     // ChainID to distinguish the diem network. e.g: PREMAINNET
@@ -23,7 +25,7 @@ pub fn verify_release(
     writeset_payload: &WriteSetPayload,
     remote_modules: &[(Vec<u8>, CompiledModule)],
 ) -> Result<()> {
-    let artifact = load_artifact(&chain_id)?;
+    let artifact = load_latest_artifact(&chain_id)?;
     if artifact.chain_id != chain_id {
         bail!("Unexpected ChainId");
     }

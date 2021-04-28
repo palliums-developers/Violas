@@ -4,8 +4,8 @@
 use crate::{layout::Layout, storage_helper::StorageHelper, swarm_config::BuildSwarm};
 use diem_config::{
     config::{
-        DiscoveryMethod, Identity, NodeConfig, OnDiskStorageConfig, SafetyRulesService,
-        SecureBackend, WaypointConfig,
+        Identity, NodeConfig, OnDiskStorageConfig, PeerRole, SafetyRulesService, SecureBackend,
+        WaypointConfig,
     },
     generator::build_seed_for_network,
     network_id::NetworkId,
@@ -242,7 +242,7 @@ impl<T: AsRef<Path>> BuildSwarm for ValidatorBuilder<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum FullnodeType {
     ValidatorFullnode,
     PublicFullnode(usize),
@@ -280,9 +280,7 @@ impl FullnodeBuilder {
         let pfn = &mut full_node_config
             .full_node_networks
             .iter_mut()
-            .find(|n| {
-                n.network_id == NetworkId::Public && n.discovery_method != DiscoveryMethod::Onchain
-            })
+            .find(|n| n.network_id == NetworkId::Public)
             .expect("vfn missing external public network in config");
         let v_vfn = &mut validator_config.full_node_networks[0];
         pfn.identity = v_vfn.identity.clone();
@@ -292,7 +290,7 @@ impl FullnodeBuilder {
 
         // Now let's prepare the full nodes internal network to communicate with the validators
         // internal network
-        let seeds = build_seed_for_network(v_vfn);
+        let seeds = build_seed_for_network(v_vfn, PeerRole::Validator);
 
         let fn_vfn = &mut full_node_config
             .full_node_networks

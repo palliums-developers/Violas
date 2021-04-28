@@ -6,15 +6,8 @@ use crate::{
     module_cache::ModuleCache,
 };
 use anyhow::{anyhow, Result};
-use compiled_stdlib::{stdlib_modules, StdLibOptions};
 use diem_types::account_address::AccountAddress;
-use move_core_types::{
-    identifier::{IdentStr, Identifier},
-    language_storage::{ModuleId, StructTag, TypeTag},
-};
-use move_vm_runtime::data_cache::RemoteCache;
-use std::rc::Rc;
-use vm::{
+use move_binary_format::{
     access::ModuleAccess,
     errors::PartialVMError,
     file_format::{
@@ -22,6 +15,12 @@ use vm::{
     },
     CompiledModule,
 };
+use move_core_types::{
+    identifier::{IdentStr, Identifier},
+    language_storage::{ModuleId, StructTag, TypeTag},
+};
+use move_vm_runtime::data_cache::RemoteCache;
+use std::rc::Rc;
 
 pub(crate) struct Resolver<'a> {
     state: &'a dyn RemoteCache,
@@ -32,7 +31,7 @@ impl<'a> Resolver<'a> {
     pub fn new(state: &'a dyn RemoteCache, use_stdlib: bool) -> Self {
         let cache = ModuleCache::new();
         if use_stdlib {
-            let modules = stdlib_modules(StdLibOptions::Compiled).compiled_modules;
+            let modules = diem_framework_releases::current_modules();
             for module in modules {
                 cache.insert(module.self_id(), module.clone());
             }
